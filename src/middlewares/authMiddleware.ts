@@ -58,7 +58,7 @@ export const authenticateAdmin = async (
 
     req.admin = admin;
     next();
-  } catch (error: any) {
+  } catch {
     res.status(401).json({
       success: false,
       message: "Invalid or expired authorization token",

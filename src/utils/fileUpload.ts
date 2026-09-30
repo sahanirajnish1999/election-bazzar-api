@@ -10,13 +10,12 @@ export const saveBase64Image = (
     throw new Error("Base64 string is required");
   }
 
-  let mimeType = "image/png";
   let extension = "png";
   let base64Data = base64String;
 
   const matches = base64String.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
   if (matches && matches.length === 3) {
-    mimeType = matches[1];
+    const mimeType = matches[1];
     base64Data = matches[2];
 
     const mimeToExt: Record<string, string> = {
