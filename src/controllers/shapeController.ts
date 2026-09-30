@@ -31,7 +31,10 @@ export const createShape = async (
       return;
     }
 
-    if (!targetCategoryId || !mongoose.Types.ObjectId.isValid(targetCategoryId)) {
+    if (
+      !targetCategoryId ||
+      !mongoose.Types.ObjectId.isValid(targetCategoryId)
+    ) {
       res.status(400).json({
         success: false,
         message: "Valid Category ID is required",
@@ -81,10 +84,7 @@ export const createShape = async (
       createdBy: req.admin?._id,
     });
 
-    const populatedShape = await newShape.populate(
-      "categoryId",
-      "name slug status",
-    );
+    const populatedShape = await newShape.populate("name slug status");
 
     res.status(201).json({
       success: true,
@@ -99,6 +99,57 @@ export const createShape = async (
       });
       return;
     }
+    next(error);
+  }
+};
+
+export const getShapesByCategorySlug = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { slug } = req.params;
+    const { status } = req.query;
+
+    if (!slug || typeof slug !== "string") {
+      res.status(400).json({
+        success: false,
+        message: "Category slug is required",
+      });
+      return;
+    }
+
+    const category = await Category.findOne({ slug });
+
+    if (!category) {
+      res.status(404).json({
+        success: false,
+        message: "Category not found",
+      });
+      return;
+    }
+
+    const filter: Record<string, any> = { categoryId: category._id };
+    if (status && (status === "active" || status === "inactive")) {
+      filter.status = status;
+    }
+
+    const shapes = await Shape.find(filter)
+      .populate("categoryId", "name slug")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      category: {
+        _id: category._id,
+        name: category.name,
+        slug: category.slug,
+      },
+      count: shapes.length,
+      data: shapes,
+    });
+  } catch (error) {
     next(error);
   }
 };
@@ -152,7 +203,11 @@ export const getAllShapes = async (
     const { categoryId, status } = req.query;
     const filter: Record<string, any> = {};
 
-    if (categoryId && typeof categoryId === "string" && mongoose.Types.ObjectId.isValid(categoryId)) {
+    if (
+      categoryId &&
+      typeof categoryId === "string" &&
+      mongoose.Types.ObjectId.isValid(categoryId)
+    ) {
       filter.categoryId = categoryId;
     }
 
