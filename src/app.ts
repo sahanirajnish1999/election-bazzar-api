@@ -6,6 +6,10 @@ import path from "path";
 import { requestLogger } from "./requestLogger";
 import { isOriginAllowed } from "./utils/corsHelper";
 
+import categoryRoutes from "./routes/categoryRoutes";
+import shapeRoutes from "./routes/shapeRoutes";
+import adminRoutes from "./routes/adminRoutes";
+
 const app = express();
 
 app.use(requestLogger);
@@ -30,24 +34,26 @@ app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // API Routes
-// TODO: Add your application routes here (e.g. app.use("/v1/api/...", ...Routes))
+app.use("/api/v1/admin", adminRoutes);
+app.use("/api/v1/categories", categoryRoutes);
+app.use("/api/v1/shapes", shapeRoutes);
 
-// Error Handling Middleware
 app.use((err: any, req: any, res: any, _next: any) => {
+  const statusCode = err.status || 500;
   console.log("\n");
   console.log("❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌");
   console.log("🔥 API ERROR");
   console.log("────────────────────────────────────────────");
   console.log(`📍 Route   : ${req.method} ${req.originalUrl}`);
-  console.log(`📦 Status  : ${err.status || 500}`);
+  console.log(`📦 Status  : ${statusCode}`);
   console.log(`💥 Message : ${err.message}`);
   console.log(`📄 Stack`);
   console.error(err.stack);
   console.log("❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n");
 
-  res.status(err.status || 500).json({
+  res.status(statusCode).json({
     success: false,
-    Message: err.message || "Internal Server Error",
+    message: err.message,
   });
 });
 
