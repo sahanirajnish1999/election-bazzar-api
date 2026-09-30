@@ -84,7 +84,10 @@ export const createShape = async (
       createdBy: req.admin?._id,
     });
 
-    const populatedShape = await newShape.populate("name slug status");
+    const populatedShape = await newShape.populate(
+      "categoryId",
+      "name slug status",
+    );
 
     res.status(201).json({
       success: true,
