@@ -11,6 +11,7 @@ import shapeRoutes from "./routes/shapeRoutes";
 import adminRoutes from "./routes/adminRoutes";
 import featureRoutes from "./routes/featureRoutes";
 import priceRoutes from "./routes/priceRoutes";
+import detailRoutes from "./routes/detailRoutes";
 
 const app = express();
 
@@ -41,6 +42,7 @@ app.use("/api/v1/categories", categoryRoutes);
 app.use("/api/v1/shapes", shapeRoutes);
 app.use("/api/v1/features", featureRoutes);
 app.use("/api/v1/prices", priceRoutes);
+app.use("/api/v1/details", detailRoutes);
 
 app.use((err: any, req: any, res: any, _next: any) => {
   const statusCode = err.status || 500;

@@ -80,6 +80,7 @@ export const formatPriceWithDiscount = (priceDoc: any) => {
     discountAmount: discount.discountAmount,
     discountPercentage: discount.discountPercentage,
     formattedDiscount: discount.formattedDiscount,
+    hasDiscount: discount.hasDiscount,
   };
 };
 
