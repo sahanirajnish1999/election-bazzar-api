@@ -118,3 +118,4 @@ export const getCategoryBySlug = async (
     next(error);
   }
 };
+

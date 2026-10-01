@@ -17,3 +17,5 @@ router.get("/features/:slug", getFeaturesByCategorySlug);
 router.get("/:slug", getCategoryBySlug);
 
 export default router;
+
+
