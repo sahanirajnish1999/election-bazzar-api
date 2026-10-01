@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
 
 export interface IFeature extends Document {
+  shapeId: Types.ObjectId;
   categoryId: Types.ObjectId;
   colors?: string[];
   materialTypes?: string[];
@@ -19,11 +20,17 @@ export interface IFeature extends Document {
 
 const FeatureSchema = new Schema<IFeature>(
   {
+    shapeId: {
+      type: Schema.Types.ObjectId,
+      ref: "Shape",
+      required: [true, "Shape ID is required"],
+      unique: true,
+      index: true,
+    },
     categoryId: {
       type: Schema.Types.ObjectId,
       ref: "Category",
       required: [true, "Category ID is required"],
-      unique: true,
       index: true,
     },
     colors: {
@@ -111,4 +118,8 @@ const FeatureSchema = new Schema<IFeature>(
 );
 
 export const Feature = mongoose.model<IFeature>("Feature", FeatureSchema);
+
+// Safely drop legacy unique index on categoryId if it exists
+Feature.collection?.dropIndex("categoryId_1").catch(() => {});
+
 export default Feature;

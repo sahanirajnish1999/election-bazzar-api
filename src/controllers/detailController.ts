@@ -60,7 +60,37 @@ export const getDetailsByCategorySlug = async (
       priceMap.set(price.shapeId.toString(), price);
     }
 
-    const shapesWithPricing = shapes.map((shape) => {
+    const featureFilter: Record<string, any> = {
+      shapeId: { $in: shapeIds },
+    };
+    if (status && (status === "active" || status === "inactive")) {
+      featureFilter.status = status;
+    }
+
+    const features = await Feature.find(featureFilter);
+    const featureMap = new Map<string, any>();
+    for (const feat of features) {
+      featureMap.set(feat.shapeId.toString(), feat);
+    }
+
+    let fallbackCategoryFeature: any = null;
+    if (features.length === 0) {
+      const catFeatDoc = await Feature.findOne({
+        categoryId: category._id,
+        ...childFilter,
+      });
+      if (catFeatDoc) {
+        fallbackCategoryFeature = stripEmptyFeatureKeys(catFeatDoc);
+        delete fallbackCategoryFeature.categoryId;
+        delete fallbackCategoryFeature.shapeId;
+        delete fallbackCategoryFeature.createdBy;
+        delete fallbackCategoryFeature.createdAt;
+        delete fallbackCategoryFeature.updatedAt;
+        delete fallbackCategoryFeature.status;
+      }
+    }
+
+    const shapesWithDetails = shapes.map((shape) => {
       const priceDoc = priceMap.get(shape._id.toString());
       let priceData = null;
 
@@ -74,29 +104,30 @@ export const getDetailsByCategorySlug = async (
         };
       }
 
+      const featureDoc = featureMap.get(shape._id.toString());
+      let featureData = null;
+      if (featureDoc) {
+        const formatted = stripEmptyFeatureKeys(featureDoc);
+        delete formatted.categoryId;
+        delete formatted.shapeId;
+        delete formatted.createdBy;
+        delete formatted.createdAt;
+        delete formatted.updatedAt;
+        delete formatted.status;
+        featureData = formatted;
+      } else if (fallbackCategoryFeature) {
+        featureData = { ...fallbackCategoryFeature };
+      }
+
       return {
         _id: shape._id,
         name: shape.name,
         slug: shape.slug,
         image: shape.image,
         price: priceData,
+        features: featureData,
       };
     });
-
-    const featureDoc = await Feature.findOne({
-      categoryId: category._id,
-      ...childFilter,
-    });
-    const formattedFeatures = featureDoc
-      ? stripEmptyFeatureKeys(featureDoc)
-      : null;
-
-    if (formattedFeatures) {
-      delete formattedFeatures.categoryId;
-      delete formattedFeatures.createdBy;
-      delete formattedFeatures.createdAt;
-      delete formattedFeatures.updatedAt;
-    }
 
     res.status(200).json({
       success: true,
@@ -107,10 +138,8 @@ export const getDetailsByCategorySlug = async (
         slug: category.slug,
         description: category.description,
         image: category.image,
-        status: category.status,
-        features: formattedFeatures,
-        shapes: shapesWithPricing,
-        totalShapes: shapesWithPricing.length,
+        shapes: shapesWithDetails,
+        totalShapes: shapesWithDetails.length,
       },
     });
   } catch (error) {

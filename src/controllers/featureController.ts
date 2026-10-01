@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { Feature } from "../models/Feature.Schema";
 import { Category } from "../models/Category.Schema";
+import { Shape } from "../models/Shape.Schema";
 
 const parseStringArray = (input: any): string[] => {
   if (Array.isArray(input)) {
@@ -44,8 +45,8 @@ export const createOrUpdateFeature = async (
 ): Promise<void> => {
   try {
     const {
-      categoryId,
-      category,
+      shapeId,
+      shape,
       colors,
       color,
       materialTypes,
@@ -71,30 +72,32 @@ export const createOrUpdateFeature = async (
       status,
     } = req.body;
 
-    const targetCategoryId = categoryId || category;
+    const targetShapeId = shapeId || shape;
 
     if (
-      !targetCategoryId ||
-      !mongoose.Types.ObjectId.isValid(targetCategoryId)
+      !targetShapeId ||
+      typeof targetShapeId !== "string" ||
+      !mongoose.Types.ObjectId.isValid(targetShapeId)
     ) {
       res.status(400).json({
         success: false,
-        message: "Valid Category ID is required",
+        message: "Valid Shape ID is required",
       });
       return;
     }
 
-    const categoryExists = await Category.findById(targetCategoryId);
-    if (!categoryExists) {
+    const shapeExists = await Shape.findById(targetShapeId);
+    if (!shapeExists) {
       res.status(404).json({
         success: false,
-        message: "Category not found with the provided ID",
+        message: "Shape not found with the provided ID",
       });
       return;
     }
 
     const featureData: Record<string, any> = {
-      categoryId: targetCategoryId,
+      shapeId: shapeExists._id,
+      categoryId: shapeExists.categoryId,
       description: description ? description.trim() : undefined,
       status: status === "inactive" ? "inactive" : "active",
       createdBy: req.admin?._id,
@@ -128,14 +131,16 @@ export const createOrUpdateFeature = async (
     );
 
     const feature = await Feature.findOneAndUpdate(
-      { categoryId: targetCategoryId },
+      { shapeId: shapeExists._id },
       featureData,
       { new: true, upsert: true, runValidators: true },
-    ).populate("categoryId", "name slug status");
+    )
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
 
     res.status(200).json({
       success: true,
-      message: "Features configured successfully for category",
+      message: "Features configured successfully for shape",
       data: stripEmptyFeatureKeys(feature),
     });
   } catch (error) {
@@ -149,8 +154,16 @@ export const getAllFeatures = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const { categoryId, status } = req.query;
+    const { categoryId, shapeId, status } = req.query;
     const filter: Record<string, any> = {};
+
+    if (
+      shapeId &&
+      typeof shapeId === "string" &&
+      mongoose.Types.ObjectId.isValid(shapeId)
+    ) {
+      filter.shapeId = shapeId;
+    }
 
     if (
       categoryId &&
@@ -165,6 +178,7 @@ export const getAllFeatures = async (
     }
 
     const features = await Feature.find(filter)
+      .populate("shapeId", "name slug status image")
       .populate("categoryId", "name slug status")
       .sort({ createdAt: -1 });
 
@@ -194,15 +208,55 @@ export const getFeatureById = async (
       return;
     }
 
-    const feature = await Feature.findById(id).populate(
-      "categoryId",
-      "name slug status",
-    );
+    const feature = await Feature.findById(id)
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
 
     if (!feature) {
       res.status(404).json({
         success: false,
         message: "Feature not found",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: stripEmptyFeatureKeys(feature),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getFeatureByShapeId = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { shapeId } = req.params;
+
+    if (
+      !shapeId ||
+      typeof shapeId !== "string" ||
+      !mongoose.Types.ObjectId.isValid(shapeId)
+    ) {
+      res.status(400).json({
+        success: false,
+        message: "Valid Shape ID is required",
+      });
+      return;
+    }
+
+    const feature = await Feature.findOne({ shapeId })
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
+
+    if (!feature) {
+      res.status(404).json({
+        success: false,
+        message: "No features configured for this shape",
       });
       return;
     }
@@ -242,12 +296,14 @@ export const getFeaturesByCategorySlug = async (
       return;
     }
 
-    const feature = await Feature.findOne({
+    const features = await Feature.find({
       categoryId: category._id,
       status: "active",
-    }).populate("categoryId", "name slug status");
+    })
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
 
-    if (!feature) {
+    if (!features || features.length === 0) {
       res.status(404).json({
         success: false,
         message: "No features configured for this category yet",
@@ -257,7 +313,8 @@ export const getFeaturesByCategorySlug = async (
 
     res.status(200).json({
       success: true,
-      data: stripEmptyFeatureKeys(feature),
+      count: features.length,
+      data: features.map((f) => stripEmptyFeatureKeys(f)),
     });
   } catch (error) {
     next(error);
@@ -281,6 +338,8 @@ export const updateFeature = async (
     }
 
     const {
+      shapeId,
+      shape,
       colors,
       color,
       materialTypes,
@@ -307,6 +366,30 @@ export const updateFeature = async (
     } = req.body;
 
     const updateFields: Record<string, any> = {};
+
+    const targetShapeId = shapeId || shape;
+    if (targetShapeId) {
+      if (
+        typeof targetShapeId !== "string" ||
+        !mongoose.Types.ObjectId.isValid(targetShapeId)
+      ) {
+        res.status(400).json({
+          success: false,
+          message: "Valid Shape ID is required",
+        });
+        return;
+      }
+      const shapeDoc = await Shape.findById(targetShapeId);
+      if (!shapeDoc) {
+        res.status(404).json({
+          success: false,
+          message: "Shape not found with the provided ID",
+        });
+        return;
+      }
+      updateFields.shapeId = shapeDoc._id;
+      updateFields.categoryId = shapeDoc.categoryId;
+    }
 
     if (colors !== undefined || color !== undefined) {
       const arr = parseStringArray(colors !== undefined ? colors : color);
@@ -403,7 +486,9 @@ export const updateFeature = async (
       id,
       { $set: updateFields },
       { new: true, runValidators: true },
-    ).populate("categoryId", "name slug status");
+    )
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
 
     if (!updatedFeature) {
       res.status(404).json({
