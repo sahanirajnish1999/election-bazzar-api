@@ -28,6 +28,7 @@ export const stripEmptyFeatureKeys = (feature: any) => {
     "matteOptions",
     "capacities",
     "tShirtSizes",
+    "displayLayouts",
   ];
   for (const key of optionKeys) {
     if (!obj[key] || (Array.isArray(obj[key]) && obj[key].length === 0)) {
@@ -67,6 +68,10 @@ export const createOrUpdateFeature = async (
       tShirtsSize,
       tshirtSize,
       tshirtSizes,
+      displayLayouts,
+      displayLayout,
+      layouts,
+      layout,
       description,
       status,
     } = req.body;
@@ -100,9 +105,9 @@ export const createOrUpdateFeature = async (
       createdBy: req.admin?._id,
     };
 
-    const addIfNotEmpty = (key: string, values: string[]) => {
-      if (values && values.length > 0) {
-        featureData[key] = values;
+    const addIfNotEmpty = (key: string, arr: string[]) => {
+      if (arr.length > 0) {
+        featureData[key] = arr;
       }
     };
 
@@ -125,6 +130,10 @@ export const createOrUpdateFeature = async (
     addIfNotEmpty(
       "tShirtSizes",
       parseStringArray(tShirtSizes || tShirtsSize || tshirtSize || tshirtSizes),
+    );
+    addIfNotEmpty(
+      "displayLayouts",
+      parseStringArray(displayLayouts || displayLayout || layouts || layout),
     );
 
     const feature = await Feature.findOneAndUpdate(
@@ -302,6 +311,10 @@ export const updateFeature = async (
       tShirtsSize,
       tshirtSize,
       tshirtSizes,
+      displayLayouts,
+      displayLayout,
+      layouts,
+      layout,
       description,
       status,
     } = req.body;
@@ -388,6 +401,24 @@ export const updateFeature = async (
               : tshirtSizes,
       );
       updateFields.tShirtSizes = arr.length > 0 ? arr : undefined;
+    }
+
+    if (
+      displayLayouts !== undefined ||
+      displayLayout !== undefined ||
+      layouts !== undefined ||
+      layout !== undefined
+    ) {
+      const arr = parseStringArray(
+        displayLayouts !== undefined
+          ? displayLayouts
+          : displayLayout !== undefined
+            ? displayLayout
+            : layouts !== undefined
+              ? layouts
+              : layout,
+      );
+      updateFields.displayLayouts = arr.length > 0 ? arr : undefined;
     }
 
     if (description !== undefined) {

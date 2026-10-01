@@ -1,5 +1,9 @@
 import { Request, Response, NextFunction } from "express";
 import { Category } from "../models/Category.Schema";
+import { Price } from "../models/Price.Schema";
+import { Feature } from "../models/Feature.Schema";
+import { stripEmptyFeatureKeys } from "./featureController";
+import { formatPriceWithDiscount } from "../services/discountService";
 import { generateUniqueSlug } from "../services/slugService";
 import { saveBase64Image } from "../utils/fileUpload";
 
@@ -82,10 +86,48 @@ export const getAllCategories = async (
 
     const categories = await Category.find(filter).sort({ createdAt: -1 });
 
+    const categoriesWithDetails = await Promise.all(
+      categories.map(async (cat) => {
+        const prices = await Price.find({
+          categoryId: cat._id,
+          status: "active",
+        }).populate("shapeId", "name slug image status");
+
+        const formattedPrices = prices.map((p) => formatPriceWithDiscount(p));
+
+        let startingPrice = null;
+        let startingMrp = null;
+        if (formattedPrices.length > 0) {
+          const minPriceDoc = formattedPrices.reduce((min, current) =>
+            current.price < min.price ? current : min,
+          );
+          startingPrice = minPriceDoc.price;
+          startingMrp = minPriceDoc.mrp;
+        }
+
+        const featureDoc = await Feature.findOne({
+          categoryId: cat._id,
+          status: "active",
+        });
+        const formattedFeature = featureDoc
+          ? stripEmptyFeatureKeys(featureDoc)
+          : null;
+
+        return {
+          ...cat.toObject(),
+          prices: formattedPrices,
+          startingPrice,
+          startingMrp,
+          feature: formattedFeature,
+          features: formattedFeature,
+        };
+      }),
+    );
+
     res.status(200).json({
       success: true,
-      count: categories.length,
-      data: categories,
+      count: categoriesWithDetails.length,
+      data: categoriesWithDetails,
     });
   } catch (error) {
     next(error);
@@ -110,9 +152,41 @@ export const getCategoryBySlug = async (
       return;
     }
 
+    const prices = await Price.find({
+      categoryId: category._id,
+      status: "active",
+    }).populate("shapeId", "name slug image status");
+
+    const formattedPrices = prices.map((p) => formatPriceWithDiscount(p));
+
+    let startingPrice = null;
+    let startingMrp = null;
+    if (formattedPrices.length > 0) {
+      const minPriceDoc = formattedPrices.reduce((min, current) =>
+        current.price < min.price ? current : min,
+      );
+      startingPrice = minPriceDoc.price;
+      startingMrp = minPriceDoc.mrp;
+    }
+
+    const featureDoc = await Feature.findOne({
+      categoryId: category._id,
+      status: "active",
+    });
+    const formattedFeature = featureDoc
+      ? stripEmptyFeatureKeys(featureDoc)
+      : null;
+
     res.status(200).json({
       success: true,
-      data: category,
+      data: {
+        ...category.toObject(),
+        prices: formattedPrices,
+        startingPrice,
+        startingMrp,
+        feature: formattedFeature,
+        features: formattedFeature,
+      },
     });
   } catch (error) {
     next(error);

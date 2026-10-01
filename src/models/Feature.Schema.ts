@@ -10,6 +10,7 @@ export interface IFeature extends Document {
   matteOptions?: string[];
   capacities?: string[];
   tShirtSizes?: string[];
+  displayLayouts?: string[];
   description?: string;
   status: "active" | "inactive";
   createdBy?: Types.ObjectId;
@@ -50,6 +51,9 @@ const FeatureSchema = new Schema<IFeature>(
     tShirtSizes: {
       type: [String],
     },
+    displayLayouts: {
+      type: [String],
+    },
     description: {
       type: String,
       trim: true,
@@ -78,6 +82,7 @@ const FeatureSchema = new Schema<IFeature>(
           "matteOptions",
           "capacities",
           "tShirtSizes",
+          "displayLayouts",
         ];
         for (const key of optionKeys) {
           if (!ret[key] || (Array.isArray(ret[key]) && ret[key].length === 0)) {
@@ -98,6 +103,7 @@ const FeatureSchema = new Schema<IFeature>(
           "matteOptions",
           "capacities",
           "tShirtSizes",
+          "displayLayouts",
         ];
         for (const key of optionKeys) {
           if (!ret[key] || (Array.isArray(ret[key]) && ret[key].length === 0)) {
