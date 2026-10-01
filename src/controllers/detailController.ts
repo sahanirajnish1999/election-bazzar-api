@@ -42,13 +42,10 @@ export const getDetailsByCategorySlug = async (
       childFilter.status = status;
     }
 
-    // 1. Fetch shapes belonging to this category
     const shapes = await Shape.find({
       categoryId: category._id,
       ...childFilter,
     }).sort({ createdAt: 1 });
-
-    // 2. Fetch prices associated with these shapes
     const shapeIds = shapes.map((shape) => shape._id);
     const priceFilter: Record<string, any> = {
       shapeId: { $in: shapeIds },
@@ -63,33 +60,29 @@ export const getDetailsByCategorySlug = async (
       priceMap.set(price.shapeId.toString(), price);
     }
 
-    // 3. Combine each shape with its formatted price & discount calculations
     const shapesWithPricing = shapes.map((shape) => {
-      const shapeObj = shape.toObject ? shape.toObject() : { ...shape };
       const priceDoc = priceMap.get(shape._id.toString());
+      let priceData = null;
+
       if (priceDoc) {
         const formattedPrice = formatPriceWithDiscount(priceDoc);
-        return {
-          ...shapeObj,
-          price: {
-            _id: formattedPrice._id,
-            price: formattedPrice.price,
-            mrp: formattedPrice.mrp,
-            discountAmount: formattedPrice.discountAmount,
-            discountPercentage: formattedPrice.discountPercentage,
-            formattedDiscount: formattedPrice.formattedDiscount,
-            hasDiscount: formattedPrice.hasDiscount,
-            status: formattedPrice.status,
-          },
+        priceData = {
+          price: formattedPrice.price,
+          mrp: formattedPrice.mrp,
+          discountAmount: formattedPrice.discountAmount,
+          formattedDiscount: formattedPrice.formattedDiscount,
         };
       }
+
       return {
-        ...shapeObj,
-        price: null,
+        _id: shape._id,
+        name: shape.name,
+        slug: shape.slug,
+        image: shape.image,
+        price: priceData,
       };
     });
 
-    // 4. Fetch features for this category
     const featureDoc = await Feature.findOne({
       categoryId: category._id,
       ...childFilter,
@@ -98,53 +91,26 @@ export const getDetailsByCategorySlug = async (
       ? stripEmptyFeatureKeys(featureDoc)
       : null;
 
-    // 5. Calculate price range and summary for the category
-    const activePrices = shapesWithPricing
-      .map((s) => s.price)
-      .filter((p): p is NonNullable<typeof p> =>
-        Boolean(p && p.status !== "inactive" && typeof p.price === "number"),
-      );
-
-    let pricingSummary = null;
-    if (activePrices.length > 0) {
-      const numericPrices = activePrices.map((p) => p.price);
-      const numericMrps = activePrices
-        .map((p) => p.mrp)
-        .filter((m): m is number => typeof m === "number" && !isNaN(m));
-
-      const minPrice = Math.min(...numericPrices);
-      const maxPrice = Math.max(...numericPrices);
-      const minMrp = numericMrps.length > 0 ? Math.min(...numericMrps) : null;
-      const maxMrp = numericMrps.length > 0 ? Math.max(...numericMrps) : null;
-      const hasDiscount = activePrices.some((p) => p.hasDiscount);
-
-      pricingSummary = {
-        minPrice,
-        maxPrice,
-        minMrp,
-        maxMrp,
-        hasDiscount,
-        formattedRange:
-          minPrice === maxPrice
-            ? `₹${minPrice}`
-            : `₹${minPrice} - ₹${maxPrice}`,
-      };
+    if (formattedFeatures) {
+      delete formattedFeatures.categoryId;
+      delete formattedFeatures.createdBy;
+      delete formattedFeatures.createdAt;
+      delete formattedFeatures.updatedAt;
     }
-
-    const categoryObj = category.toObject
-      ? category.toObject()
-      : { ...category };
 
     res.status(200).json({
       success: true,
-      message: "Category details page fetched successfully",
+      message: "Details page fetched successfully",
       data: {
-        ...categoryObj,
-        // category: categoryObj,
+        _id: category._id,
+        name: category.name,
+        slug: category.slug,
+        description: category.description,
+        image: category.image,
+        status: category.status,
         features: formattedFeatures,
         shapes: shapesWithPricing,
         totalShapes: shapesWithPricing.length,
-        pricingSummary,
       },
     });
   } catch (error) {
