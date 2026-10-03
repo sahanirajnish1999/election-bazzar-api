@@ -3,6 +3,9 @@ import mongoose from "mongoose";
 import { Feature } from "../models/Feature.Schema";
 import { Category } from "../models/Category.Schema";
 import { Shape } from "../models/Shape.Schema";
+import { Price } from "../models/Price.Schema";
+import { formatPriceWithDiscount } from "../services/discountService";
+import { enrichFeatureWithPrices } from "./categoryController";
 
 const parseStringArray = (input: any): string[] => {
   if (Array.isArray(input)) {
@@ -37,6 +40,74 @@ export const stripEmptyFeatureKeys = (feature: any) => {
     }
   }
   return obj;
+};
+
+export const enrichFeatureWithPriceLookup = async (
+  feature: any,
+  priceMap?: Map<string, { price: number; mrp: number }>,
+) => {
+  if (!feature) return null;
+  const obj = feature.toObject ? feature.toObject() : { ...feature };
+
+  const shapeId = (obj.shapeId?._id || obj.shapeId)?.toString();
+  const categoryId = (obj.categoryId?._id || obj.categoryId)?.toString();
+
+  let basePrice = 199;
+  let baseMrp = 399;
+
+  if (priceMap) {
+    if (shapeId && priceMap.has(`shape_${shapeId}`)) {
+      const p = priceMap.get(`shape_${shapeId}`)!;
+      basePrice = p.price;
+      baseMrp = p.mrp;
+    } else if (categoryId && priceMap.has(`cat_${categoryId}`)) {
+      const p = priceMap.get(`cat_${categoryId}`)!;
+      basePrice = p.price;
+      baseMrp = p.mrp;
+    }
+  } else {
+    let priceDoc = null;
+    if (shapeId) {
+      priceDoc = await Price.findOne({ shapeId, status: "active" });
+    }
+    if (!priceDoc && categoryId) {
+      priceDoc = await Price.findOne({ categoryId, status: "active" });
+    }
+    if (priceDoc) {
+      const formatted = formatPriceWithDiscount(priceDoc);
+      basePrice = formatted.price;
+      baseMrp = formatted.mrp;
+    }
+  }
+
+  return enrichFeatureWithPrices(feature, basePrice, baseMrp);
+};
+
+export const enrichFeaturesListWithPriceLookup = async (features: any[]) => {
+  if (!Array.isArray(features) || features.length === 0) return [];
+
+  const activePrices = await Price.find({ status: "active" });
+  const priceMap = new Map<string, { price: number; mrp: number }>();
+
+  for (const priceDoc of activePrices) {
+    const formatted = formatPriceWithDiscount(priceDoc);
+    if (priceDoc.shapeId) {
+      priceMap.set(`shape_${priceDoc.shapeId.toString()}`, {
+        price: formatted.price,
+        mrp: formatted.mrp,
+      });
+    }
+    if (priceDoc.categoryId) {
+      priceMap.set(`cat_${priceDoc.categoryId.toString()}`, {
+        price: formatted.price,
+        mrp: formatted.mrp,
+      });
+    }
+  }
+
+  return Promise.all(
+    features.map((f) => enrichFeatureWithPriceLookup(f, priceMap)),
+  );
 };
 
 export const createOrUpdateFeature = async (
@@ -173,10 +244,12 @@ export const createOrUpdateFeature = async (
       .populate("shapeId", "name slug status image")
       .populate("categoryId", "name slug status");
 
+    const enrichedData = await enrichFeatureWithPriceLookup(feature);
+
     res.status(200).json({
       success: true,
       message: "Features configured successfully for shape",
-      data: stripEmptyFeatureKeys(feature),
+      data: enrichedData,
     });
   } catch (error) {
     next(error);
@@ -217,10 +290,12 @@ export const getAllFeatures = async (
       .populate("categoryId", "name slug status")
       .sort({ createdAt: -1 });
 
+    const enrichedFeatures = await enrichFeaturesListWithPriceLookup(features);
+
     res.status(200).json({
       success: true,
-      count: features.length,
-      data: features.map((f) => stripEmptyFeatureKeys(f)),
+      count: enrichedFeatures.length,
+      data: enrichedFeatures,
     });
   } catch (error) {
     next(error);
@@ -255,9 +330,11 @@ export const getFeatureById = async (
       return;
     }
 
+    const enrichedData = await enrichFeatureWithPriceLookup(feature);
+
     res.status(200).json({
       success: true,
-      data: stripEmptyFeatureKeys(feature),
+      data: enrichedData,
     });
   } catch (error) {
     next(error);
@@ -296,9 +373,11 @@ export const getFeatureByShapeId = async (
       return;
     }
 
+    const enrichedData = await enrichFeatureWithPriceLookup(feature);
+
     res.status(200).json({
       success: true,
-      data: stripEmptyFeatureKeys(feature),
+      data: enrichedData,
     });
   } catch (error) {
     next(error);
@@ -346,10 +425,12 @@ export const getFeaturesByCategorySlug = async (
       return;
     }
 
+    const enrichedFeatures = await enrichFeaturesListWithPriceLookup(features);
+
     res.status(200).json({
       success: true,
-      count: features.length,
-      data: features.map((f) => stripEmptyFeatureKeys(f)),
+      count: enrichedFeatures.length,
+      data: enrichedFeatures,
     });
   } catch (error) {
     next(error);
@@ -555,10 +636,12 @@ export const updateFeature = async (
       return;
     }
 
+    const enrichedData = await enrichFeatureWithPriceLookup(updatedFeature);
+
     res.status(200).json({
       success: true,
       message: "Feature updated successfully",
-      data: stripEmptyFeatureKeys(updatedFeature),
+      data: enrichedData,
     });
   } catch (error) {
     next(error);

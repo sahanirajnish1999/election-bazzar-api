@@ -22,7 +22,6 @@ const ShapeSchema = new Schema<IShape>(
     slug: {
       type: String,
       required: [true, "Shape slug is required"],
-      unique: true,
       trim: true,
       lowercase: true,
       index: true,
@@ -57,5 +56,11 @@ const ShapeSchema = new Schema<IShape>(
   },
 );
 
+ShapeSchema.index({ categoryId: 1, slug: 1 }, { unique: true });
+
 export const Shape = mongoose.model<IShape>("Shape", ShapeSchema);
+
+// Safely drop legacy unique index on slug if it exists
+Shape.collection?.dropIndex("slug_1").catch(() => {});
+
 export default Shape;

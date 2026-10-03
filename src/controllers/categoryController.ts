@@ -73,6 +73,125 @@ export const createCategory = async (
   }
 };
 
+export const enrichFeatureWithPrices = (feature: any, basePrice: number = 199, baseMrp: number = 399) => {
+  if (!feature) return null;
+  const obj = feature.toObject ? feature.toObject() : { ...feature };
+
+  const startP = typeof basePrice === "number" && basePrice > 0 ? basePrice : 199;
+  const startM = typeof baseMrp === "number" && baseMrp > 0 ? baseMrp : Math.round(startP * 2);
+
+  const priceModifiers: Record<string, number> = {};
+  const optionPrices: Record<string, number> = {};
+
+  const buildOptions = (arr?: string[], increments: number[] = [0, 150, 300, 500, 750]) => {
+    if (!Array.isArray(arr) || arr.length === 0) return undefined;
+    return arr.map((item, idx) => {
+      const modifier = increments[idx] !== undefined ? increments[idx] : idx * 150;
+      const optionPrice = startP + modifier;
+      const optionMrp = Math.round(optionPrice * 2);
+
+      priceModifiers[item] = modifier;
+      optionPrices[item] = optionPrice;
+
+      return {
+        id: item.toLowerCase().replace(/\s+/g, "-"),
+        label: item,
+        name: item,
+        price: optionPrice,
+        mrp: optionMrp,
+        priceModifier: modifier,
+        additionalPrice: modifier,
+      };
+    });
+  };
+
+  if (Array.isArray(obj.sizes) && obj.sizes.length > 0) {
+    obj.sizeOptions = buildOptions(obj.sizes, [0, 100, 250, 450, 700]);
+  }
+
+  if (Array.isArray(obj.capacities) && obj.capacities.length > 0) {
+    obj.capacityOptions = buildOptions(obj.capacities, [0, 150, 300, 500]);
+  }
+
+  if (Array.isArray(obj.materialTypes) && obj.materialTypes.length > 0) {
+    obj.materialOptions = buildOptions(obj.materialTypes, [0, 50, 150, 300]);
+  }
+
+  if (Array.isArray(obj.thicknesses) && obj.thicknesses.length > 0) {
+    obj.thicknessOptions = buildOptions(obj.thicknesses, [0, 100, 200, 350]);
+  }
+
+  if (Array.isArray(obj.numberOfPages) && obj.numberOfPages.length > 0) {
+    obj.pageOptions = buildOptions(obj.numberOfPages, [0, 150, 300, 500]);
+  }
+
+  if (Array.isArray(obj.tShirtSizes) && obj.tShirtSizes.length > 0) {
+    obj.tShirtSizeOptions = buildOptions(obj.tShirtSizes, [0, 0, 50, 100, 150]);
+  }
+
+  if (Array.isArray(obj.displayLayouts) && obj.displayLayouts.length > 0) {
+    obj.layoutOptions = obj.displayLayouts.map((item: any, idx: number) => {
+      if (typeof item === "string") {
+        const increments = [0, 400, 800, 1200];
+        const modifier = increments[idx] !== undefined ? increments[idx] : idx * 300;
+        const optionPrice = startP + modifier;
+        priceModifiers[item] = modifier;
+        optionPrices[item] = optionPrice;
+        return {
+          id: item.toLowerCase().replace(/\s+/g, "-"),
+          label: item,
+          name: item,
+          price: optionPrice,
+          mrp: Math.round(optionPrice * 2),
+          priceModifier: modifier,
+          additionalPrice: modifier,
+        };
+      }
+      const labelVal = item.name || item.label || item.id;
+      const optionPrice = item.price || (startP + (item.priceModifier || item.additionalPrice || 0));
+      const optionMrp = item.mrp || Math.round(optionPrice * 2);
+      const modifier = item.priceModifier ?? item.additionalPrice ?? Math.max(0, optionPrice - startP);
+
+      priceModifiers[labelVal] = modifier;
+      optionPrices[labelVal] = optionPrice;
+
+      return {
+        ...item,
+        id: item.id || labelVal.toLowerCase().replace(/\s+/g, "-"),
+        label: item.label || labelVal,
+        name: item.name || labelVal,
+        price: optionPrice,
+        mrp: optionMrp,
+        priceModifier: modifier,
+        additionalPrice: modifier,
+      };
+    });
+  }
+
+  if (Array.isArray(obj.colors) && obj.colors.length > 0) {
+    obj.colorOptions = obj.colors.map((hex: string) => {
+      priceModifiers[hex] = 0;
+      optionPrices[hex] = startP;
+      return {
+        id: hex,
+        label: hex,
+        name: hex,
+        hex: hex,
+        price: startP,
+        mrp: startM,
+        priceModifier: 0,
+        additionalPrice: 0,
+        isFree: true,
+      };
+    });
+  }
+
+  obj.optionPrices = optionPrices;
+  obj.priceModifiers = priceModifiers;
+
+  return stripEmptyFeatureKeys(obj);
+};
+
 export const buildCategoryDetails = async (category: any) => {
   const catObj = category.toObject ? category.toObject() : { ...category };
 
@@ -90,27 +209,19 @@ export const buildCategoryDetails = async (category: any) => {
 
   const formattedPrices = prices.map((p) => formatPriceWithDiscount(p));
 
-  // Attach individual price information onto each shape item in the shapes array
-  const shapesWithPrices = shapes.map((shape) => {
-    const shapeObj = shape.toObject ? shape.toObject() : { ...shape };
-    const priceDoc = formattedPrices.find(
-      (p) =>
-        p.shapeId &&
-        ((p.shapeId._id && p.shapeId._id.toString() === shape._id.toString()) ||
-          p.shapeId.toString() === shape._id.toString()),
-    );
-    return {
-      ...shapeObj,
-      price: priceDoc ? priceDoc.price : null,
-      mrp: priceDoc ? priceDoc.mrp : null,
-      pricing: priceDoc || null,
-      priceDetails: priceDoc || null,
-    };
+  // Fetch all features belonging to this category or its shapes
+  const shapeIds = shapes.map((s) => s._id);
+  const allFeatures = await Feature.find({
+    $or: [
+      { categoryId: category._id },
+      { shapeId: { $in: shapeIds } },
+    ],
+    status: "active",
   });
 
   // Calculate starting price & starting mrp
-  let startingPrice = null;
-  let startingMrp = null;
+  let startingPrice = 199;
+  let startingMrp = 399;
   if (formattedPrices.length > 0) {
     const minPriceDoc = formattedPrices.reduce((min, current) =>
       current.price < min.price ? current : min,
@@ -119,18 +230,46 @@ export const buildCategoryDetails = async (category: any) => {
     startingMrp = minPriceDoc.mrp;
   }
 
-  // Fetch features belonging to this category or its shapes
-  const shapeIds = shapes.map((s) => s._id);
-  const featureDoc = await Feature.findOne({
-    $or: [
-      { categoryId: category._id },
-      { shapeId: { $in: shapeIds } },
-    ],
-    status: "active",
+  // Attach individual price and features information onto each shape item in the shapes array
+  const shapesWithPrices = shapes.map((shape) => {
+    const shapeObj = shape.toObject ? shape.toObject() : { ...shape };
+    const priceDoc = formattedPrices.find(
+      (p) =>
+        p.shapeId &&
+        ((p.shapeId._id && p.shapeId._id.toString() === shape._id.toString()) ||
+          p.shapeId.toString() === shape._id.toString()),
+    );
+
+    const sPrice = priceDoc ? priceDoc.price : startingPrice;
+    const sMrp = priceDoc ? priceDoc.mrp : startingMrp;
+
+    const featureDoc =
+      allFeatures.find(
+        (f) => f.shapeId && f.shapeId.toString() === shape._id.toString(),
+      ) ||
+      allFeatures.find(
+        (f) => f.categoryId && f.categoryId.toString() === category._id.toString(),
+      ) ||
+      allFeatures[0];
+
+    const enrichedShapeFeature = featureDoc
+      ? enrichFeatureWithPrices(featureDoc, sPrice, sMrp)
+      : null;
+
+    return {
+      ...shapeObj,
+      price: sPrice,
+      mrp: sMrp,
+      pricing: priceDoc || null,
+      priceDetails: priceDoc || null,
+      feature: enrichedShapeFeature,
+      features: enrichedShapeFeature,
+    };
   });
 
-  const formattedFeature = featureDoc
-    ? stripEmptyFeatureKeys(featureDoc)
+  const mainFeatureDoc = allFeatures[0] || null;
+  const formattedFeature = mainFeatureDoc
+    ? enrichFeatureWithPrices(mainFeatureDoc, startingPrice, startingMrp)
     : null;
 
   return {
@@ -179,7 +318,7 @@ export const getAllCategories = async (
     }
 
     const page = Math.max(1, parseInt(queryPage as string, 10) || 1);
-    const limit = Math.max(1, parseInt(queryLimit as string, 10) || 10);
+    const limit = Math.max(1, parseInt(queryLimit as string, 10) || 100);
     const skip = (page - 1) * limit;
 
     const [categories, total] = await Promise.all([

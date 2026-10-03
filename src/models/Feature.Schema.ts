@@ -11,7 +11,7 @@ export interface IFeature extends Document {
   matteOptions?: string[];
   capacities?: string[];
   tShirtSizes?: string[];
-  displayLayouts?: string[];
+  displayLayouts?: any[];
   description?: string;
   status: "active" | "inactive";
   createdBy?: Types.ObjectId;
@@ -59,7 +59,7 @@ const FeatureSchema = new Schema<IFeature>(
       type: [String],
     },
     displayLayouts: {
-      type: [String],
+      type: [Schema.Types.Mixed],
     },
     description: {
       type: String,
