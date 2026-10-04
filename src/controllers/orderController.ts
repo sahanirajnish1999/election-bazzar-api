@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { Order, IOrderItem } from "../models/Order.Schema";
 import { Cart } from "../models/Cart.Schema";
+import { saveIfBase64, sanitizeImages } from "../utils/fileUpload";
 
 // Generate unique order ID helper
 const generateOrderId = (): string => {
@@ -51,26 +52,34 @@ export const createOrder = async (
 
     // If explicit items array passed in body, use that
     if (Array.isArray(inputItems) && inputItems.length > 0) {
-      orderItems = inputItems.map((item: any) => ({
-        _id: new mongoose.Types.ObjectId(),
-        itemName: item.itemName || item.name || "Custom Print Item",
-        price: Number(item.price || 0),
-        quantity: Math.max(1, Number(item.quantity || item.numberOfItem || 1)),
-        dimensions: item.dimensions ? String(item.dimensions) : undefined,
-        size: item.size ? String(item.size) : undefined,
-        surface: item.surface ? String(item.surface) : undefined,
-        finishing: item.finishing ? String(item.finishing) : undefined,
-        wrapStyle: item.wrapStyle ? String(item.wrapStyle) : undefined,
-        color: item.color ? String(item.color) : undefined,
-        borderWidth: item.borderWidth ? String(item.borderWidth) : undefined,
-        chooseFormat: item.chooseFormat ? String(item.chooseFormat) : undefined,
-        shape: item.shape ? String(item.shape) : undefined,
-        mattingStyle: item.mattingStyle ? String(item.mattingStyle) : undefined,
-        image: item.image || (Array.isArray(item.allImages) ? item.allImages[0] : null),
-        allImages: Array.isArray(item.allImages) ? item.allImages : [],
-        designState: item.designState || {},
-        specifications: item.specifications || {},
-      }));
+      orderItems = inputItems.map((item: any) => {
+        const rawPrimaryImage = item.image || (Array.isArray(item.allImages) ? item.allImages[0] : null);
+        const processedImage = rawPrimaryImage ? saveIfBase64(rawPrimaryImage, "orders") : null;
+        const processedAllImages = Array.isArray(item.allImages)
+          ? item.allImages.map((img: string) => saveIfBase64(img, "orders"))
+          : processedImage ? [processedImage] : [];
+
+        return {
+          _id: new mongoose.Types.ObjectId(),
+          itemName: item.itemName || item.name || "Custom Print Item",
+          price: Number(item.price || 0),
+          quantity: Math.max(1, Number(item.quantity || item.numberOfItem || 1)),
+          dimensions: item.dimensions ? String(item.dimensions) : undefined,
+          size: item.size ? String(item.size) : undefined,
+          surface: item.surface ? String(item.surface) : undefined,
+          finishing: item.finishing ? String(item.finishing) : undefined,
+          wrapStyle: item.wrapStyle ? String(item.wrapStyle) : undefined,
+          color: item.color ? String(item.color) : undefined,
+          borderWidth: item.borderWidth ? String(item.borderWidth) : undefined,
+          chooseFormat: item.chooseFormat ? String(item.chooseFormat) : undefined,
+          shape: item.shape ? String(item.shape) : undefined,
+          mattingStyle: item.mattingStyle ? String(item.mattingStyle) : undefined,
+          image: processedImage,
+          allImages: processedAllImages,
+          designState: item.designState ? sanitizeImages(item.designState, "orders") : {},
+          specifications: item.specifications ? sanitizeImages(item.specifications, "orders") : {},
+        };
+      });
     } else {
       // Fetch items from active cart
       const cartQuery: Record<string, any> = {};

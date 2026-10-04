@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { Cart } from "../models/Cart.Schema";
+import { saveIfBase64, sanitizeImages } from "../utils/fileUpload";
 
 // Helper to find or initialize cart for a user / session / default
 const getOrCreateCart = async (userId?: string, sessionId?: string) => {
@@ -83,6 +84,14 @@ export const addToCart = async (
       sessionId || (req.headers["x-session-id"] as string)
     );
 
+    const rawPrimaryImage = image || (Array.isArray(allImages) ? allImages[0] : null);
+    const processedImage = rawPrimaryImage ? saveIfBase64(rawPrimaryImage, "cart") : null;
+    const processedAllImages = Array.isArray(allImages)
+      ? allImages.map((img: string) => saveIfBase64(img, "cart"))
+      : processedImage ? [processedImage] : [];
+    const processedDesignState = designState ? sanitizeImages(designState, "cart") : {};
+    const processedSpecifications = specifications ? sanitizeImages(specifications, "cart") : {};
+
     const newItem = {
       _id: new mongoose.Types.ObjectId(),
       itemName: itemName.trim(),
@@ -98,10 +107,10 @@ export const addToCart = async (
       chooseFormat: chooseFormat ? String(chooseFormat).trim() : undefined,
       shape: shape ? String(shape).trim() : undefined,
       mattingStyle: mattingStyle ? String(mattingStyle).trim() : undefined,
-      image: image || (Array.isArray(allImages) ? allImages[0] : null),
-      allImages: Array.isArray(allImages) ? allImages : [],
-      designState: designState || {},
-      specifications: specifications || {},
+      image: processedImage,
+      allImages: processedAllImages,
+      designState: processedDesignState,
+      specifications: processedSpecifications,
     };
 
     cart.items.push(newItem as any);

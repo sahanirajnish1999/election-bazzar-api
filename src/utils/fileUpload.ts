@@ -1,6 +1,10 @@
 import fs from "fs";
 import path from "path";
 
+export const isBase64DataUrl = (str: any): boolean => {
+  return typeof str === "string" && str.startsWith("data:") && str.includes(";base64,");
+};
+
 export const saveBase64Image = (
   base64String: string,
   folderName = "misc",
@@ -13,22 +17,24 @@ export const saveBase64Image = (
   let extension = "png";
   let base64Data = base64String;
 
-  const matches = base64String.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-  if (matches && matches.length === 3) {
-    const mimeType = matches[1];
-    base64Data = matches[2];
+  if (base64String.startsWith("data:")) {
+    const base64Index = base64String.indexOf(";base64,");
+    if (base64Index !== -1) {
+      const mimeType = base64String.slice(5, base64Index);
+      base64Data = base64String.slice(base64Index + 8);
 
-    const mimeToExt: Record<string, string> = {
-      "image/jpeg": "jpg",
-      "image/jpg": "jpg",
-      "image/png": "png",
-      "image/webp": "webp",
-      "image/gif": "gif",
-      "image/svg+xml": "svg",
-      "application/pdf": "pdf",
-    };
+      const mimeToExt: Record<string, string> = {
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/gif": "gif",
+        "image/svg+xml": "svg",
+        "application/pdf": "pdf",
+      };
 
-    extension = mimeToExt[mimeType] || mimeType.split("/")[1] || "png";
+      extension = mimeToExt[mimeType] || mimeType.split("/")[1] || "png";
+    }
   }
 
   const uploadDir = path.join(process.cwd(), "uploads", folderName);
@@ -49,6 +55,40 @@ export const saveBase64Image = (
   return `/uploads/${folderName}/${fileName}`;
 };
 
+export const saveIfBase64 = (
+  value: any,
+  folderName = "cart"
+): any => {
+  if (typeof value !== "string") return value;
+  if (isBase64DataUrl(value)) {
+    try {
+      return saveBase64Image(value, folderName);
+    } catch (e: any) {
+      console.error("Failed to save base64 image:", e.message);
+      return value;
+    }
+  }
+  return value;
+};
+
+export const sanitizeImages = (data: any, folderName = "cart"): any => {
+  if (!data) return data;
+  if (typeof data === "string") {
+    return saveIfBase64(data, folderName);
+  }
+  if (Array.isArray(data)) {
+    return data.map((item) => sanitizeImages(item, folderName));
+  }
+  if (typeof data === "object" && data.constructor === Object) {
+    const sanitized: Record<string, any> = {};
+    for (const key of Object.keys(data)) {
+      sanitized[key] = sanitizeImages(data[key], folderName);
+    }
+    return sanitized;
+  }
+  return data;
+};
+
 export const deleteImage = (imageUrl: string): void => {
   if (!imageUrl) return;
   try {
@@ -63,3 +103,4 @@ export const deleteImage = (imageUrl: string): void => {
     console.error("Error deleting image:", err.message);
   }
 };
+
