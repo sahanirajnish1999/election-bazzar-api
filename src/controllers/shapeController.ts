@@ -2,8 +2,10 @@ import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { Shape } from "../models/Shape.Schema";
 import { Category } from "../models/Category.Schema";
+import { Feature } from "../models/Feature.Schema";
+import { Price } from "../models/Price.Schema";
 import { generateUniqueSlug } from "../services/slugService";
-import { saveBase64Image } from "../utils/fileUpload";
+import { saveBase64Image, deleteImage } from "../utils/fileUpload";
 
 export const createShape = async (
   req: Request,
@@ -256,6 +258,134 @@ export const getShapeBySlug = async (
     res.status(200).json({
       success: true,
       data: shape,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+export const updateShape = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    if (!id || typeof id !== "string" || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ success: false, message: "Valid Shape ID is required" });
+      return;
+    }
+
+    const shape = await Shape.findById(id);
+    if (!shape) {
+      res.status(404).json({ success: false, message: "Shape not found" });
+      return;
+    }
+
+    const { name, slug: customSlug, description, image, status } = req.body;
+
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim()) {
+        res.status(400).json({ success: false, message: "Shape name must be a non-empty string" });
+        return;
+      }
+      shape.name = name.trim();
+    }
+
+    if (customSlug !== undefined && customSlug !== null) {
+      if (typeof customSlug === "string" && customSlug.trim()) {
+        const newSlug = customSlug.trim().toLowerCase().replace(/\s+/g, "-");
+        // Check uniqueness only within the same category (compound index: categoryId + slug)
+        const conflict = await Shape.findOne({
+          categoryId: shape.categoryId,
+          slug: newSlug,
+          _id: { $ne: shape._id },
+        });
+        if (conflict) {
+          res.status(409).json({ success: false, message: `Slug "${newSlug}" already exists in this category` });
+          return;
+        }
+        shape.slug = newSlug;
+      }
+    }
+
+    if (description !== undefined) {
+      shape.description = typeof description === "string" ? description.trim() : description;
+    }
+
+    if (image !== undefined) {
+      if (typeof image === "string" && image.startsWith("data:image/")) {
+        try {
+          const newImageUrl = saveBase64Image(image, "shapes");
+          if (shape.image && shape.image !== newImageUrl) deleteImage(shape.image);
+          shape.image = newImageUrl;
+        } catch (uploadError: any) {
+          res.status(400).json({ success: false, message: `Failed to upload image: ${uploadError.message}` });
+          return;
+        }
+      } else if (image === null || image === "") {
+        if (shape.image) deleteImage(shape.image);
+        shape.image = null;
+      } else if (typeof image === "string") {
+        shape.image = image.trim();
+      }
+    }
+
+    if (status !== undefined) {
+      if (status === "active" || status === "inactive") {
+        shape.status = status;
+      } else {
+        res.status(400).json({ success: false, message: "Status must be 'active' or 'inactive'" });
+        return;
+      }
+    }
+
+    await shape.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Shape updated successfully",
+      data: shape,
+    });
+  } catch (error: any) {
+    if (error.code === 11000) {
+      res.status(409).json({ success: false, message: "Shape with this slug already exists" });
+      return;
+    }
+    next(error);
+  }
+};
+
+export const deleteShape = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    if (!id || typeof id !== "string" || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ success: false, message: "Valid Shape ID is required" });
+      return;
+    }
+
+    const shape = await Shape.findById(id);
+    if (!shape) {
+      res.status(404).json({ success: false, message: "Shape not found" });
+      return;
+    }
+
+    if (shape.image) deleteImage(shape.image);
+
+    // Cascade delete related features and prices
+    await Feature.deleteMany({ shapeId: shape._id });
+    await Price.deleteMany({ shapeId: shape._id });
+    await Shape.findByIdAndDelete(shape._id);
+
+    res.status(200).json({
+      success: true,
+      message: "Shape deleted successfully",
+      data: { _id: shape._id, name: shape.name, slug: shape.slug },
     });
   } catch (error) {
     next(error);

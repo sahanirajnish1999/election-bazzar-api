@@ -61,7 +61,12 @@ AdminSchema.pre("save", async function () {
 AdminSchema.methods.comparePassword = async function (
   candidatePassword: string,
 ): Promise<boolean> {
-  return bcrypt.compare(candidatePassword, this.password);
+  if (!this.password) return false;
+  try {
+    return await bcrypt.compare(candidatePassword, this.password);
+  } catch {
+    return false;
+  }
 };
 
 export const Admin = mongoose.model<IAdmin>("Admin", AdminSchema);
