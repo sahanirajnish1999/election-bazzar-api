@@ -2,6 +2,10 @@ import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { Feature } from "../models/Feature.Schema";
 import { Category } from "../models/Category.Schema";
+import { Shape } from "../models/Shape.Schema";
+import { Price } from "../models/Price.Schema";
+import { formatPriceWithDiscount } from "../services/discountService";
+import { enrichFeatureWithPrices } from "./categoryController";
 
 const parseStringArray = (input: any): string[] => {
   if (Array.isArray(input)) {
@@ -28,6 +32,7 @@ export const stripEmptyFeatureKeys = (feature: any) => {
     "matteOptions",
     "capacities",
     "tShirtSizes",
+    "displayLayouts",
   ];
   for (const key of optionKeys) {
     if (!obj[key] || (Array.isArray(obj[key]) && obj[key].length === 0)) {
@@ -37,6 +42,74 @@ export const stripEmptyFeatureKeys = (feature: any) => {
   return obj;
 };
 
+export const enrichFeatureWithPriceLookup = async (
+  feature: any,
+  priceMap?: Map<string, { price: number; mrp: number }>,
+) => {
+  if (!feature) return null;
+  const obj = feature.toObject ? feature.toObject() : { ...feature };
+
+  const shapeId = (obj.shapeId?._id || obj.shapeId)?.toString();
+  const categoryId = (obj.categoryId?._id || obj.categoryId)?.toString();
+
+  let basePrice = 199;
+  let baseMrp = 399;
+
+  if (priceMap) {
+    if (shapeId && priceMap.has(`shape_${shapeId}`)) {
+      const p = priceMap.get(`shape_${shapeId}`)!;
+      basePrice = p.price;
+      baseMrp = p.mrp;
+    } else if (categoryId && priceMap.has(`cat_${categoryId}`)) {
+      const p = priceMap.get(`cat_${categoryId}`)!;
+      basePrice = p.price;
+      baseMrp = p.mrp;
+    }
+  } else {
+    let priceDoc = null;
+    if (shapeId) {
+      priceDoc = await Price.findOne({ shapeId, status: "active" });
+    }
+    if (!priceDoc && categoryId) {
+      priceDoc = await Price.findOne({ categoryId, status: "active" });
+    }
+    if (priceDoc) {
+      const formatted = formatPriceWithDiscount(priceDoc);
+      basePrice = formatted.price;
+      baseMrp = formatted.mrp;
+    }
+  }
+
+  return enrichFeatureWithPrices(feature, basePrice, baseMrp);
+};
+
+export const enrichFeaturesListWithPriceLookup = async (features: any[]) => {
+  if (!Array.isArray(features) || features.length === 0) return [];
+
+  const activePrices = await Price.find({ status: "active" });
+  const priceMap = new Map<string, { price: number; mrp: number }>();
+
+  for (const priceDoc of activePrices) {
+    const formatted = formatPriceWithDiscount(priceDoc);
+    if (priceDoc.shapeId) {
+      priceMap.set(`shape_${priceDoc.shapeId.toString()}`, {
+        price: formatted.price,
+        mrp: formatted.mrp,
+      });
+    }
+    if (priceDoc.categoryId) {
+      priceMap.set(`cat_${priceDoc.categoryId.toString()}`, {
+        price: formatted.price,
+        mrp: formatted.mrp,
+      });
+    }
+  }
+
+  return Promise.all(
+    features.map((f) => enrichFeatureWithPriceLookup(f, priceMap)),
+  );
+};
+
 export const createOrUpdateFeature = async (
   req: Request,
   res: Response,
@@ -44,8 +117,8 @@ export const createOrUpdateFeature = async (
 ): Promise<void> => {
   try {
     const {
-      categoryId,
-      category,
+      shapeId,
+      shape,
       colors,
       color,
       materialTypes,
@@ -67,42 +140,74 @@ export const createOrUpdateFeature = async (
       tShirtsSize,
       tshirtSize,
       tshirtSizes,
+      displayLayouts,
+      displayLayout,
+      layouts,
+      layout,
       description,
       status,
     } = req.body;
 
-    const targetCategoryId = categoryId || category;
+    const targetInput =
+      shapeId ||
+      shape ||
+      req.body.categoryId ||
+      req.body.category ||
+      req.body.id;
 
-    if (
-      !targetCategoryId ||
-      !mongoose.Types.ObjectId.isValid(targetCategoryId)
-    ) {
+    if (!targetInput || typeof targetInput !== "string" || !targetInput.trim()) {
       res.status(400).json({
         success: false,
-        message: "Valid Category ID is required",
+        message: "Valid Shape ID, Category ID, or Slug is required",
       });
       return;
     }
 
-    const categoryExists = await Category.findById(targetCategoryId);
-    if (!categoryExists) {
+    const inputStr = targetInput.trim();
+    let shapeExists = null;
+
+    if (mongoose.Types.ObjectId.isValid(inputStr)) {
+      shapeExists = await Shape.findById(inputStr);
+      if (!shapeExists) {
+        shapeExists = await Shape.findOne({ categoryId: inputStr });
+      }
+    }
+
+    if (!shapeExists) {
+      shapeExists = await Shape.findOne({ slug: inputStr.toLowerCase() });
+    }
+
+    if (!shapeExists) {
+      const cat = await Category.findOne({
+        $or: [
+          ...(mongoose.Types.ObjectId.isValid(inputStr) ? [{ _id: inputStr }] : []),
+          { slug: inputStr.toLowerCase() },
+        ],
+      });
+      if (cat) {
+        shapeExists = await Shape.findOne({ categoryId: cat._id });
+      }
+    }
+
+    if (!shapeExists) {
       res.status(404).json({
         success: false,
-        message: "Category not found with the provided ID",
+        message: "Shape or Category not found with the provided identifier",
       });
       return;
     }
 
     const featureData: Record<string, any> = {
-      categoryId: targetCategoryId,
+      shapeId: shapeExists._id,
+      categoryId: shapeExists.categoryId,
       description: description ? description.trim() : undefined,
       status: status === "inactive" ? "inactive" : "active",
       createdBy: req.admin?._id,
     };
 
-    const addIfNotEmpty = (key: string, values: string[]) => {
-      if (values && values.length > 0) {
-        featureData[key] = values;
+    const addIfNotEmpty = (key: string, arr: string[]) => {
+      if (arr.length > 0) {
+        featureData[key] = arr;
       }
     };
 
@@ -126,17 +231,25 @@ export const createOrUpdateFeature = async (
       "tShirtSizes",
       parseStringArray(tShirtSizes || tShirtsSize || tshirtSize || tshirtSizes),
     );
+    addIfNotEmpty(
+      "displayLayouts",
+      parseStringArray(displayLayouts || displayLayout || layouts || layout),
+    );
 
     const feature = await Feature.findOneAndUpdate(
-      { categoryId: targetCategoryId },
+      { shapeId: shapeExists._id },
       featureData,
       { new: true, upsert: true, runValidators: true },
-    ).populate("categoryId", "name slug status");
+    )
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
+
+    const enrichedData = await enrichFeatureWithPriceLookup(feature);
 
     res.status(200).json({
       success: true,
-      message: "Features configured successfully for category",
-      data: stripEmptyFeatureKeys(feature),
+      message: "Features configured successfully for shape",
+      data: enrichedData,
     });
   } catch (error) {
     next(error);
@@ -149,8 +262,16 @@ export const getAllFeatures = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const { categoryId, status } = req.query;
+    const { categoryId, shapeId, status } = req.query;
     const filter: Record<string, any> = {};
+
+    if (
+      shapeId &&
+      typeof shapeId === "string" &&
+      mongoose.Types.ObjectId.isValid(shapeId)
+    ) {
+      filter.shapeId = shapeId;
+    }
 
     if (
       categoryId &&
@@ -165,13 +286,16 @@ export const getAllFeatures = async (
     }
 
     const features = await Feature.find(filter)
+      .populate("shapeId", "name slug status image")
       .populate("categoryId", "name slug status")
       .sort({ createdAt: -1 });
 
+    const enrichedFeatures = await enrichFeaturesListWithPriceLookup(features);
+
     res.status(200).json({
       success: true,
-      count: features.length,
-      data: features.map((f) => stripEmptyFeatureKeys(f)),
+      count: enrichedFeatures.length,
+      data: enrichedFeatures,
     });
   } catch (error) {
     next(error);
@@ -194,10 +318,9 @@ export const getFeatureById = async (
       return;
     }
 
-    const feature = await Feature.findById(id).populate(
-      "categoryId",
-      "name slug status",
-    );
+    const feature = await Feature.findById(id)
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
 
     if (!feature) {
       res.status(404).json({
@@ -207,9 +330,54 @@ export const getFeatureById = async (
       return;
     }
 
+    const enrichedData = await enrichFeatureWithPriceLookup(feature);
+
     res.status(200).json({
       success: true,
-      data: stripEmptyFeatureKeys(feature),
+      data: enrichedData,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getFeatureByShapeId = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { shapeId } = req.params;
+
+    if (
+      !shapeId ||
+      typeof shapeId !== "string" ||
+      !mongoose.Types.ObjectId.isValid(shapeId)
+    ) {
+      res.status(400).json({
+        success: false,
+        message: "Valid Shape ID is required",
+      });
+      return;
+    }
+
+    const feature = await Feature.findOne({ shapeId })
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
+
+    if (!feature) {
+      res.status(404).json({
+        success: false,
+        message: "No features configured for this shape",
+      });
+      return;
+    }
+
+    const enrichedData = await enrichFeatureWithPriceLookup(feature);
+
+    res.status(200).json({
+      success: true,
+      data: enrichedData,
     });
   } catch (error) {
     next(error);
@@ -242,12 +410,14 @@ export const getFeaturesByCategorySlug = async (
       return;
     }
 
-    const feature = await Feature.findOne({
+    const features = await Feature.find({
       categoryId: category._id,
       status: "active",
-    }).populate("categoryId", "name slug status");
+    })
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
 
-    if (!feature) {
+    if (!features || features.length === 0) {
       res.status(404).json({
         success: false,
         message: "No features configured for this category yet",
@@ -255,9 +425,12 @@ export const getFeaturesByCategorySlug = async (
       return;
     }
 
+    const enrichedFeatures = await enrichFeaturesListWithPriceLookup(features);
+
     res.status(200).json({
       success: true,
-      data: stripEmptyFeatureKeys(feature),
+      count: enrichedFeatures.length,
+      data: enrichedFeatures,
     });
   } catch (error) {
     next(error);
@@ -281,6 +454,8 @@ export const updateFeature = async (
     }
 
     const {
+      shapeId,
+      shape,
       colors,
       color,
       materialTypes,
@@ -302,11 +477,39 @@ export const updateFeature = async (
       tShirtsSize,
       tshirtSize,
       tshirtSizes,
+      displayLayouts,
+      displayLayout,
+      layouts,
+      layout,
       description,
       status,
     } = req.body;
 
     const updateFields: Record<string, any> = {};
+
+    const targetShapeId = shapeId || shape;
+    if (targetShapeId) {
+      if (
+        typeof targetShapeId !== "string" ||
+        !mongoose.Types.ObjectId.isValid(targetShapeId)
+      ) {
+        res.status(400).json({
+          success: false,
+          message: "Valid Shape ID is required",
+        });
+        return;
+      }
+      const shapeDoc = await Shape.findById(targetShapeId);
+      if (!shapeDoc) {
+        res.status(404).json({
+          success: false,
+          message: "Shape not found with the provided ID",
+        });
+        return;
+      }
+      updateFields.shapeId = shapeDoc._id;
+      updateFields.categoryId = shapeDoc.categoryId;
+    }
 
     if (colors !== undefined || color !== undefined) {
       const arr = parseStringArray(colors !== undefined ? colors : color);
@@ -390,6 +593,24 @@ export const updateFeature = async (
       updateFields.tShirtSizes = arr.length > 0 ? arr : undefined;
     }
 
+    if (
+      displayLayouts !== undefined ||
+      displayLayout !== undefined ||
+      layouts !== undefined ||
+      layout !== undefined
+    ) {
+      const arr = parseStringArray(
+        displayLayouts !== undefined
+          ? displayLayouts
+          : displayLayout !== undefined
+            ? displayLayout
+            : layouts !== undefined
+              ? layouts
+              : layout,
+      );
+      updateFields.displayLayouts = arr.length > 0 ? arr : undefined;
+    }
+
     if (description !== undefined) {
       updateFields.description =
         typeof description === "string" ? description.trim() : description;
@@ -403,7 +624,9 @@ export const updateFeature = async (
       id,
       { $set: updateFields },
       { new: true, runValidators: true },
-    ).populate("categoryId", "name slug status");
+    )
+      .populate("shapeId", "name slug status image")
+      .populate("categoryId", "name slug status");
 
     if (!updatedFeature) {
       res.status(404).json({
@@ -413,10 +636,12 @@ export const updateFeature = async (
       return;
     }
 
+    const enrichedData = await enrichFeatureWithPriceLookup(updatedFeature);
+
     res.status(200).json({
       success: true,
       message: "Feature updated successfully",
-      data: stripEmptyFeatureKeys(updatedFeature),
+      data: enrichedData,
     });
   } catch (error) {
     next(error);
