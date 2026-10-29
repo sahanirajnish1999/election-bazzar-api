@@ -14,6 +14,9 @@ import priceRoutes from "./routes/priceRoutes";
 import detailRoutes from "./routes/detailRoutes";
 import cartRoutes from "./routes/cartRoutes";
 import orderRoutes from "./routes/orderRoutes";
+import wishlistRoutes from "./routes/wishlistRoutes";
+import compareRoutes from "./routes/compareRoutes";
+import imageRoutes from "./routes/imageRoutes";
 
 const app = express();
 
@@ -47,6 +50,10 @@ app.use("/api/v1/prices", priceRoutes);
 app.use("/api/v1/details", detailRoutes);
 app.use("/api/v1/cart", cartRoutes);
 app.use("/api/v1/orders", orderRoutes);
+app.use("/api/v1/wishlist", wishlistRoutes);
+app.use("/api/v1/compare", compareRoutes);
+app.use("/api/v1/images", imageRoutes);
+
 
 app.use((err: any, req: any, res: any, _next: any) => {
   const statusCode = err.status || 500;
