@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { Price } from "../models/Price.Schema";
 import { Shape } from "../models/Shape.Schema";
+import { Category } from "../models/Category.Schema";
+import { Feature } from "../models/Feature.Schema";
 import {
   calculateQuantityPrice,
   formatPriceWithDiscount,
@@ -296,3 +298,134 @@ export const getAllPrices = async (
     next(error);
   }
 };
+
+/**
+ * GET /api/v1/pricing/shapes/:productId or /api/v1/prices/shapes/:productId
+ * Returns dimensions & pricing table for shapes in the 3D editor
+ */
+export const getPricingShapesByProductId = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { productId } = req.params;
+
+    if (!productId || typeof productId !== "string") {
+      res.status(400).json({
+        success: false,
+        message: "Product or Shape ID/slug is required",
+      });
+      return;
+    }
+
+    const clean = productId.trim();
+
+    // 1. Resolve category by ID or slug
+    let category: any = null;
+    if (mongoose.Types.ObjectId.isValid(clean)) {
+      category = await Category.findById(clean);
+    }
+    if (!category) {
+      category = await Category.findOne({ slug: clean.toLowerCase() });
+    }
+
+    let shapes: any[] = [];
+    if (category) {
+      shapes = await Shape.find({ categoryId: category._id, status: "active" });
+    } else {
+      // 2. Try resolving as a direct Shape
+      let shapeDoc: any = null;
+      if (mongoose.Types.ObjectId.isValid(clean)) {
+        shapeDoc = await Shape.findById(clean);
+      }
+      if (!shapeDoc) {
+        shapeDoc = await Shape.findOne({ slug: clean.toLowerCase() });
+      }
+
+      if (shapeDoc) {
+        shapes = [shapeDoc];
+        category = await Category.findById(shapeDoc.categoryId);
+      }
+    }
+
+    if (shapes.length === 0 && !category) {
+      res.status(404).json({
+        success: false,
+        message: `Product or Shape "${clean}" not found`,
+      });
+      return;
+    }
+
+    const shapeIds = shapes.map((s) => s._id);
+
+    const [prices, features] = await Promise.all([
+      Price.find({ shapeId: { $in: shapeIds }, status: "active" }),
+      Feature.find({
+        $or: [
+          ...(category ? [{ categoryId: category._id }] : []),
+          { shapeId: { $in: shapeIds } },
+        ],
+        status: "active",
+      }),
+    ]);
+
+    const defaultSizes = ["8x8 inch", "10x10 inch", "12x12 inch", "16x16 inch", "12x18 inch", "16x24 inch", "20x30 inch"];
+    const defaultMaterials = ["Matte Canvas", "Glossy Canvas", "Museum Grade Canvas"];
+    const defaultThicknesses = ["0.75 inch Slim", "1.5 inch Gallery Wrap"];
+
+    const data = shapes.map((shape) => {
+      const priceDoc = prices.find((p) => p.shapeId.toString() === shape._id.toString());
+      const featureDoc =
+        features.find((f) => f.shapeId && f.shapeId.toString() === shape._id.toString()) ||
+        features.find((f) => category && f.categoryId && f.categoryId.toString() === category._id.toString()) ||
+        features[0];
+
+      const basePrice = priceDoc?.price || 199;
+      const baseMrp = priceDoc?.mrp || (priceDoc?.price ? priceDoc.price * 2 : 399);
+
+      const sizes = Array.isArray(featureDoc?.sizes) && featureDoc.sizes.length > 0 ? featureDoc.sizes : defaultSizes;
+      const materials = Array.isArray(featureDoc?.materialTypes) && featureDoc.materialTypes.length > 0 ? featureDoc.materialTypes : defaultMaterials;
+      const thicknesses = Array.isArray(featureDoc?.thicknesses) && featureDoc.thicknesses.length > 0 ? featureDoc.thicknesses : defaultThicknesses;
+
+      // Build dimension and pricing matrix
+      const pricingTable = sizes.map((sizeStr: string, idx: number) => {
+        const increment = idx * 150;
+        const sizePrice = basePrice + increment;
+        const sizeMrp = baseMrp + increment * 2;
+        return {
+          dimension: sizeStr,
+          size: sizeStr,
+          price: sizePrice,
+          mrp: sizeMrp,
+          discountPercent: sizeMrp > sizePrice ? Math.round(((sizeMrp - sizePrice) / sizeMrp) * 100) : 0,
+        };
+      });
+
+      return {
+        shapeId: shape._id,
+        shapeName: shape.name,
+        slug: shape.slug,
+        image: shape.image,
+        startingPrice: basePrice,
+        startingMrp: baseMrp,
+        dimensions: sizes,
+        sizes,
+        materials,
+        thicknesses,
+        pricingTable,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      productId: category?._id || productId,
+      productName: category?.name || shapes[0]?.name || "",
+      productSlug: category?.slug || shapes[0]?.slug || "",
+      data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

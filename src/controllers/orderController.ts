@@ -39,12 +39,13 @@ export const createOrder = async (
       shippingFee: inputShippingFee,
       totalAmount: inputTotalAmount,
       totalPrice: inputTotalPrice,
+      pricing,
       userId,
       sessionId,
       clearCartAfterOrder = true,
     } = req.body;
 
-    const queryUserId = userId || req.body.user?._id;
+    const queryUserId = req.user?.id || userId || req.body.user?._id;
     const querySessionId = sessionId || (req.headers["x-session-id"] as string);
 
     let orderItems: IOrderItem[] = [];
@@ -142,11 +143,13 @@ export const createOrder = async (
       email: inputShippingAddress?.email || email || "",
       phone: inputShippingAddress?.phone || phone || "",
       address:
+        inputShippingAddress?.streetAddress ||
         inputShippingAddress?.address ||
         inputShippingAddress?.street ||
         address ||
         "",
       street:
+        inputShippingAddress?.streetAddress ||
         inputShippingAddress?.street ||
         inputShippingAddress?.address ||
         address ||
@@ -172,22 +175,41 @@ export const createOrder = async (
           : undefined,
     };
 
-    // Calculate subtotal and total
+    // Calculate subtotal, taxes, shipping, discount, and total
     const computedSubtotal = orderItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0
     );
     const subtotal =
-      inputSubtotal !== undefined ? Number(inputSubtotal) : computedSubtotal;
-    const tax = inputTax !== undefined ? Number(inputTax) : 0;
+      pricing?.subtotal !== undefined
+        ? Number(pricing.subtotal)
+        : inputSubtotal !== undefined
+        ? Number(inputSubtotal)
+        : computedSubtotal;
+
+    const discount = pricing?.discount !== undefined ? Number(pricing.discount) : 0;
+    const tax =
+      pricing?.taxes !== undefined
+        ? Number(pricing.taxes)
+        : inputTax !== undefined
+        ? Number(inputTax)
+        : 0;
+
     const shippingFee =
-      inputShippingFee !== undefined ? Number(inputShippingFee) : 0;
+      pricing?.shipping !== undefined
+        ? Number(pricing.shipping)
+        : inputShippingFee !== undefined
+        ? Number(inputShippingFee)
+        : 0;
+
     const totalAmount =
-      inputTotalAmount !== undefined
+      pricing?.total !== undefined
+        ? Number(pricing.total)
+        : inputTotalAmount !== undefined
         ? Number(inputTotalAmount)
         : inputTotalPrice !== undefined
         ? Number(inputTotalPrice)
-        : subtotal + tax + shippingFee;
+        : Math.max(0, subtotal - discount + tax + shippingFee);
 
     const orderId = generateOrderId();
 
@@ -224,8 +246,30 @@ export const createOrder = async (
 
     res.status(201).json({
       success: true,
-      message: "Order created successfully",
-      data: order,
+      message: "Order placed successfully",
+      data: {
+        _id: order._id,
+        orderNumber: order.orderId,
+        orderId: order.orderId,
+        status: "Confirmed",
+        orderStatus: order.orderStatus,
+        total: order.totalAmount,
+        totalAmount: order.totalAmount,
+        subtotal: order.subtotal,
+        pricing: {
+          subtotal: order.subtotal,
+          discount,
+          shipping: order.shippingFee,
+          taxes: order.tax,
+          total: order.totalAmount,
+          couponCode: pricing?.couponCode,
+        },
+        items: order.items,
+        shippingAddress: order.shippingAddress,
+        paymentDetails: order.paymentDetails,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+      },
     });
   } catch (error) {
     next(error);
@@ -238,21 +282,37 @@ export const getOrders = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const userId = (req.query.userId || req.query.user) as string;
+    const userId = (req.user?.id || req.query.userId || req.query.user) as string;
     const sessionId = (req.query.sessionId || req.headers["x-session-id"]) as string;
     const status = req.query.status as string;
 
     const query: Record<string, any> = {};
     if (userId) query.userId = userId;
-    if (sessionId) query.sessionId = sessionId;
+    else if (sessionId) query.sessionId = sessionId;
     if (status) query.orderStatus = status;
 
     const orders = await Order.find(query).sort({ createdAt: -1 });
 
+    const formattedOrders = orders.map((order) => {
+      const obj = order.toObject ? order.toObject() : { ...order };
+      return {
+        ...obj,
+        orderNumber: obj.orderId,
+        status: obj.orderStatus === "pending" ? "Confirmed" : obj.orderStatus,
+        pricing: {
+          total: obj.totalAmount,
+          subtotal: obj.subtotal,
+          shipping: obj.shippingFee,
+          taxes: obj.tax,
+        },
+        total: obj.totalAmount,
+      };
+    });
+
     res.status(200).json({
       success: true,
-      count: orders.length,
-      data: orders,
+      count: formattedOrders.length,
+      data: formattedOrders,
     });
   } catch (error) {
     next(error);

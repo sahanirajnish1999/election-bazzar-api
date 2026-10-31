@@ -3,6 +3,27 @@ import mongoose from "mongoose";
 import { Cart } from "../models/Cart.Schema";
 import { saveIfBase64, sanitizeImages } from "../utils/fileUpload";
 
+// Helper to format cart response matching spec
+const formatCartData = (cart: any) => {
+  if (!cart) {
+    return {
+      items: [],
+      subtotal: 0,
+      total: 0,
+      totalPrice: 0,
+      totalQuantity: 0,
+    };
+  }
+  const obj = cart.toObject ? cart.toObject() : { ...cart };
+  const subtotal = obj.totalPrice || 0;
+  const total = obj.totalPrice || 0;
+  return {
+    ...obj,
+    subtotal,
+    total,
+  };
+};
+
 // Helper to find or initialize cart for a user / session / default
 const getOrCreateCart = async (userId?: string, sessionId?: string) => {
   const query: Record<string, any> = {};
@@ -17,7 +38,7 @@ const getOrCreateCart = async (userId?: string, sessionId?: string) => {
     cart = await Cart.findOne(query);
   }
 
-  if (!cart) {
+  if (!cart && !userId) {
     cart = await Cart.findOne({}).sort({ updatedAt: -1 });
   }
 
@@ -78,11 +99,10 @@ export const addToCart = async (
     }
 
     const itemQty = Math.max(1, Number(quantity || numberOfItem || 1));
+    const effectiveUserId = req.user?.id || userId || req.body.user?._id;
+    const effectiveSessionId = sessionId || (req.headers["x-session-id"] as string);
 
-    const cart = await getOrCreateCart(
-      userId || req.body.user?._id,
-      sessionId || (req.headers["x-session-id"] as string)
-    );
+    const cart = await getOrCreateCart(effectiveUserId, effectiveSessionId);
 
     const rawPrimaryImage = image || (Array.isArray(allImages) ? allImages[0] : null);
     const processedImage = rawPrimaryImage ? saveIfBase64(rawPrimaryImage, "cart") : null;
@@ -122,7 +142,7 @@ export const addToCart = async (
       count: cart.items.length,
       totalQuantity: cart.totalQuantity,
       totalPrice: cart.totalPrice,
-      data: cart,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);
@@ -135,12 +155,12 @@ export const getCart = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const userId = (req.query.userId || req.query.user) as string;
+    const effectiveUserId = req.user?.id || (req.query.userId || req.query.user) as string;
     const sessionId = (req.query.sessionId || req.headers["x-session-id"]) as string;
 
     const query: Record<string, any> = {};
-    if (userId) {
-      query.userId = userId;
+    if (effectiveUserId) {
+      query.userId = effectiveUserId;
     } else if (sessionId) {
       query.sessionId = sessionId;
     }
@@ -150,7 +170,7 @@ export const getCart = async (
       cart = await Cart.findOne(query);
     }
 
-    if (!cart) {
+    if (!cart && !effectiveUserId) {
       cart = await Cart.findOne({}).sort({ updatedAt: -1 });
     }
 
@@ -162,6 +182,8 @@ export const getCart = async (
         totalPrice: 0,
         data: {
           items: [],
+          subtotal: 0,
+          total: 0,
           totalPrice: 0,
           totalQuantity: 0,
         },
@@ -174,7 +196,7 @@ export const getCart = async (
       count: cart.items.length,
       totalQuantity: cart.totalQuantity,
       totalPrice: cart.totalPrice,
-      data: cart,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);
@@ -187,7 +209,7 @@ export const updateCartItem = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const rawItemId = req.params.itemId;
+    const rawItemId = req.params.itemId || req.params.id;
     const itemId = Array.isArray(rawItemId) ? rawItemId[0] : rawItemId;
 
     if (!itemId || !mongoose.Types.ObjectId.isValid(itemId)) {
@@ -207,7 +229,7 @@ export const updateCartItem = async (
       return;
     }
 
-    const { quantity, price } = req.body;
+    const { quantity, numberOfItem, price } = req.body;
     const targetItem = cart.items.find(
       (item: any) => item._id && item._id.toString() === itemId
     );
@@ -220,8 +242,9 @@ export const updateCartItem = async (
       return;
     }
 
-    if (quantity !== undefined) {
-      const newQty = Number(quantity);
+    const rawQty = quantity !== undefined ? quantity : numberOfItem;
+    if (rawQty !== undefined) {
+      const newQty = Number(rawQty);
       if (isNaN(newQty) || newQty <= 0) {
         cart.items = cart.items.filter(
           (item: any) => item._id && item._id.toString() !== itemId
@@ -246,7 +269,7 @@ export const updateCartItem = async (
       count: cart.items.length,
       totalQuantity: cart.totalQuantity,
       totalPrice: cart.totalPrice,
-      data: cart,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);
@@ -259,7 +282,7 @@ export const deleteCartItem = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const rawItemId = req.params.itemId;
+    const rawItemId = req.params.itemId || req.params.id;
     const itemId = Array.isArray(rawItemId) ? rawItemId[0] : rawItemId;
 
     if (!itemId || !mongoose.Types.ObjectId.isValid(itemId)) {
@@ -287,11 +310,11 @@ export const deleteCartItem = async (
 
     res.status(200).json({
       success: true,
-      message: "Cart item removed successfully",
+      message: "Item removed",
       count: cart.items.length,
       totalQuantity: cart.totalQuantity,
       totalPrice: cart.totalPrice,
-      data: cart,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);
@@ -305,19 +328,19 @@ export const clearCart = async (
 ): Promise<void> => {
   try {
     const body = req.body || {};
-    const userId = (req.query.userId || body.userId) as string;
+    const effectiveUserId = req.user?.id || (req.query.userId || body.userId) as string;
     const sessionId = (req.query.sessionId || body.sessionId || req.headers["x-session-id"]) as string;
     const itemId = (req.query.itemId || req.query.cartItemId || req.query.id || body.itemId || body.cartItemId || body.id) as string;
 
     const query: Record<string, any> = {};
-    if (userId) query.userId = userId;
+    if (effectiveUserId) query.userId = effectiveUserId;
     if (sessionId) query.sessionId = sessionId;
 
     let cart = null;
     if (Object.keys(query).length > 0) {
       cart = await Cart.findOne(query);
     }
-    if (!cart) {
+    if (!cart && !effectiveUserId) {
       cart = await Cart.findOne({}).sort({ updatedAt: -1 });
     }
 
@@ -334,11 +357,11 @@ export const clearCart = async (
 
     res.status(200).json({
       success: true,
-      message: itemId ? "Cart item removed successfully" : "Cart cleared successfully",
+      message: itemId ? "Item removed" : "Cart cleared",
       count: cart ? cart.items.length : 0,
       totalQuantity: cart ? cart.totalQuantity : 0,
       totalPrice: cart ? cart.totalPrice : 0,
-      data: cart || { items: [], totalPrice: 0, totalQuantity: 0 },
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);

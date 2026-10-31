@@ -122,12 +122,14 @@ export const uploadImage = async (
     res.status(201).json({
       success: true,
       message: "Image uploaded successfully",
+      imageId: primaryFile.filename,
       url: primaryFile.url,
       imageUrl: primaryFile.imageUrl,
       relativeUrl: primaryFile.relativeUrl,
       path: primaryFile.relativeUrl,
       filename: primaryFile.filename,
       data: {
+        imageId: primaryFile.filename,
         url: primaryFile.url,
         imageUrl: primaryFile.imageUrl,
         relativeUrl: primaryFile.relativeUrl,
