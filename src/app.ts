@@ -7,13 +7,19 @@ import { requestLogger } from "./requestLogger";
 import { isOriginAllowed } from "./utils/corsHelper";
 
 import categoryRoutes from "./routes/categoryRoutes";
+import productRoutes from "./routes/productRoutes";
 import shapeRoutes from "./routes/shapeRoutes";
 import adminRoutes from "./routes/adminRoutes";
+import authRoutes from "./routes/authRoutes";
 import featureRoutes from "./routes/featureRoutes";
 import priceRoutes from "./routes/priceRoutes";
 import detailRoutes from "./routes/detailRoutes";
 import cartRoutes from "./routes/cartRoutes";
 import orderRoutes from "./routes/orderRoutes";
+import wishlistRoutes from "./routes/wishlistRoutes";
+import compareRoutes from "./routes/compareRoutes";
+import imageRoutes from "./routes/imageRoutes";
+import newsletterRoutes from "./routes/newsletterRoutes";
 
 const app = express();
 
@@ -29,7 +35,18 @@ app.use(
       }
     },
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "x-session-id",
+      "X-Session-Id",
+      "session-id",
+      "x-auth-token",
+      "X-Auth-Token",
+      "token",
+    ],
     credentials: true,
   }),
 );
@@ -40,13 +57,22 @@ app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // API Routes
 app.use("/api/v1/admin", adminRoutes);
+app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/categories", categoryRoutes);
+app.use("/api/v1/products", productRoutes);
 app.use("/api/v1/shapes", shapeRoutes);
 app.use("/api/v1/features", featureRoutes);
 app.use("/api/v1/prices", priceRoutes);
+app.use("/api/v1/pricing", priceRoutes);
 app.use("/api/v1/details", detailRoutes);
 app.use("/api/v1/cart", cartRoutes);
 app.use("/api/v1/orders", orderRoutes);
+app.use("/api/v1/wishlist", wishlistRoutes);
+app.use("/api/v1/compare", compareRoutes);
+app.use("/api/v1/images", imageRoutes);
+app.use("/api/v1/newsletter", newsletterRoutes);
+
+
 
 app.use((err: any, req: any, res: any, _next: any) => {
   const statusCode = err.status || 500;

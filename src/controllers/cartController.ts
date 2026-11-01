@@ -3,31 +3,95 @@ import mongoose from "mongoose";
 import { Cart } from "../models/Cart.Schema";
 import { saveIfBase64, sanitizeImages } from "../utils/fileUpload";
 
-// Helper to find or initialize cart for a user / session / default
-const getOrCreateCart = async (userId?: string, sessionId?: string) => {
-  const query: Record<string, any> = {};
-  if (userId) {
-    query.userId = userId;
-  } else if (sessionId) {
-    query.sessionId = sessionId;
-  }
-
-  let cart = null;
-  if (Object.keys(query).length > 0) {
-    cart = await Cart.findOne(query);
-  }
-
+// Helper to format cart response matching spec
+const formatCartData = (cart: any) => {
   if (!cart) {
-    cart = await Cart.findOne({}).sort({ updatedAt: -1 });
-  }
-
-  if (!cart) {
-    cart = new Cart({
-      userId: userId || undefined,
-      sessionId: sessionId || "default-session",
+    return {
       items: [],
+      subtotal: 0,
+      total: 0,
+      totalPrice: 0,
+      totalQuantity: 0,
+    };
+  }
+  const obj = cart.toObject ? cart.toObject() : { ...cart };
+  const subtotal = obj.totalPrice || 0;
+  const total = obj.totalPrice || 0;
+  return {
+    ...obj,
+    subtotal,
+    total,
+  };
+};
+
+// Helper to extract user & session identity cleanly
+const resolveCartIdentity = (req: Request) => {
+  // If user is authenticated via JWT token, req.user.id is authoritative
+  const authenticatedUserId = req.user?.id || null;
+
+  // Session identifier from headers or body/query
+  const sessionId = (
+    (req.headers["x-session-id"] as string) ||
+    (req.headers["session-id"] as string) ||
+    req.body?.sessionId ||
+    req.query?.sessionId
+  )?.toString().trim() || null;
+
+  // Client-passed userId fallback (only if unauthenticated)
+  const explicitUserId = (req.body?.userId || req.query?.userId || req.query?.user) as string || null;
+
+  const effectiveUserId = authenticatedUserId || explicitUserId;
+
+  return {
+    authenticatedUserId,
+    effectiveUserId,
+    sessionId,
+  };
+};
+
+// Helper to find or initialize cart for a user / session
+const getOrCreateCart = async (userId?: string | null, sessionId?: string | null): Promise<any> => {
+  let cart: any = null;
+
+  // 1. Search by userId first if authenticated/provided
+  if (userId) {
+    cart = await Cart.findOne({ userId });
+
+    // If no cart by userId exists, check if user had a guest cart for this sessionId and migrate it
+    if (!cart && sessionId) {
+      cart = await Cart.findOne({
+        sessionId,
+        $or: [{ userId: null }, { userId: { $exists: false } }, { userId: "" }],
+      });
+      if (cart) {
+        cart.userId = userId;
+        await cart.save();
+        return cart;
+      }
+    }
+  } else if (sessionId) {
+    // 2. Search strictly by sessionId for guests
+    cart = await Cart.findOne({
+      sessionId,
+      $or: [{ userId: null }, { userId: { $exists: false } }, { userId: "" }],
     });
   }
+
+  // 3. Return existing cart if found
+  if (cart) {
+    return cart;
+  }
+
+  // 4. Create new cart strictly for this userId or sessionId.
+  // NEVER query someone else's cart!
+  const newSessionId = sessionId || (userId ? `session-${userId}` : `guest-${new mongoose.Types.ObjectId().toString()}`);
+
+  cart = new Cart({
+    userId: userId || undefined,
+    sessionId: newSessionId,
+    items: [],
+  });
+
   return cart;
 };
 
@@ -56,8 +120,6 @@ export const addToCart = async (
       allImages,
       designState,
       specifications,
-      userId,
-      sessionId,
     } = req.body;
 
     if (!itemName || typeof itemName !== "string" || !itemName.trim()) {
@@ -78,11 +140,9 @@ export const addToCart = async (
     }
 
     const itemQty = Math.max(1, Number(quantity || numberOfItem || 1));
+    const { effectiveUserId, sessionId } = resolveCartIdentity(req);
 
-    const cart = await getOrCreateCart(
-      userId || req.body.user?._id,
-      sessionId || (req.headers["x-session-id"] as string)
-    );
+    const cart: any = await getOrCreateCart(effectiveUserId, sessionId);
 
     const rawPrimaryImage = image || (Array.isArray(allImages) ? allImages[0] : null);
     const processedImage = rawPrimaryImage ? saveIfBase64(rawPrimaryImage, "cart") : null;
@@ -122,7 +182,8 @@ export const addToCart = async (
       count: cart.items.length,
       totalQuantity: cart.totalQuantity,
       totalPrice: cart.totalPrice,
-      data: cart,
+      sessionId: cart.sessionId,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);
@@ -135,25 +196,36 @@ export const getCart = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const userId = (req.query.userId || req.query.user) as string;
-    const sessionId = (req.query.sessionId || req.headers["x-session-id"]) as string;
+    const { authenticatedUserId, effectiveUserId, sessionId } = resolveCartIdentity(req);
 
-    const query: Record<string, any> = {};
-    if (userId) {
-      query.userId = userId;
+    let cart: any = null;
+
+    if (authenticatedUserId) {
+      // 1. Authenticated user: search strictly by token user id
+      cart = await Cart.findOne({ userId: authenticatedUserId });
+
+      // If user has no cart, but passed a sessionId with an unclaimed guest cart, claim it
+      if (!cart && sessionId) {
+        cart = await Cart.findOne({
+          sessionId,
+          $or: [{ userId: null }, { userId: { $exists: false } }, { userId: "" }],
+        });
+        if (cart) {
+          cart.userId = authenticatedUserId;
+          await cart.save();
+        }
+      }
+    } else if (effectiveUserId) {
+      cart = await Cart.findOne({ userId: effectiveUserId });
     } else if (sessionId) {
-      query.sessionId = sessionId;
+      // 2. Unauthenticated guest: search strictly by sessionId
+      cart = await Cart.findOne({
+        sessionId,
+        $or: [{ userId: null }, { userId: { $exists: false } }, { userId: "" }],
+      });
     }
 
-    let cart = null;
-    if (Object.keys(query).length > 0) {
-      cart = await Cart.findOne(query);
-    }
-
-    if (!cart) {
-      cart = await Cart.findOne({}).sort({ updatedAt: -1 });
-    }
-
+    // 3. If no cart found, return empty cart. NEVER fall back to another user's cart!
     if (!cart) {
       res.status(200).json({
         success: true,
@@ -162,6 +234,8 @@ export const getCart = async (
         totalPrice: 0,
         data: {
           items: [],
+          subtotal: 0,
+          total: 0,
           totalPrice: 0,
           totalQuantity: 0,
         },
@@ -174,7 +248,8 @@ export const getCart = async (
       count: cart.items.length,
       totalQuantity: cart.totalQuantity,
       totalPrice: cart.totalPrice,
-      data: cart,
+      sessionId: cart.sessionId,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);
@@ -187,7 +262,7 @@ export const updateCartItem = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const rawItemId = req.params.itemId;
+    const rawItemId = req.params.itemId || req.params.id;
     const itemId = Array.isArray(rawItemId) ? rawItemId[0] : rawItemId;
 
     if (!itemId || !mongoose.Types.ObjectId.isValid(itemId)) {
@@ -198,16 +273,26 @@ export const updateCartItem = async (
       return;
     }
 
-    const cart = await Cart.findOne({ "items._id": itemId });
+    const { effectiveUserId, sessionId } = resolveCartIdentity(req);
+
+    // Build scoped query to guarantee item belongs to current user/session
+    const query: Record<string, any> = { "items._id": itemId };
+    if (effectiveUserId) {
+      query.userId = effectiveUserId;
+    } else if (sessionId) {
+      query.sessionId = sessionId;
+    }
+
+    const cart = await Cart.findOne(query);
     if (!cart) {
       res.status(404).json({
         success: false,
-        message: "Cart item not found",
+        message: "Cart item not found in your cart",
       });
       return;
     }
 
-    const { quantity, price } = req.body;
+    const { quantity, numberOfItem, price } = req.body;
     const targetItem = cart.items.find(
       (item: any) => item._id && item._id.toString() === itemId
     );
@@ -220,8 +305,9 @@ export const updateCartItem = async (
       return;
     }
 
-    if (quantity !== undefined) {
-      const newQty = Number(quantity);
+    const rawQty = quantity !== undefined ? quantity : numberOfItem;
+    if (rawQty !== undefined) {
+      const newQty = Number(rawQty);
       if (isNaN(newQty) || newQty <= 0) {
         cart.items = cart.items.filter(
           (item: any) => item._id && item._id.toString() !== itemId
@@ -246,7 +332,8 @@ export const updateCartItem = async (
       count: cart.items.length,
       totalQuantity: cart.totalQuantity,
       totalPrice: cart.totalPrice,
-      data: cart,
+      sessionId: cart.sessionId,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);
@@ -259,7 +346,7 @@ export const deleteCartItem = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const rawItemId = req.params.itemId;
+    const rawItemId = req.params.itemId || req.params.id;
     const itemId = Array.isArray(rawItemId) ? rawItemId[0] : rawItemId;
 
     if (!itemId || !mongoose.Types.ObjectId.isValid(itemId)) {
@@ -270,11 +357,21 @@ export const deleteCartItem = async (
       return;
     }
 
-    const cart = await Cart.findOne({ "items._id": itemId });
+    const { effectiveUserId, sessionId } = resolveCartIdentity(req);
+
+    // Build scoped query to guarantee item belongs to current user/session
+    const query: Record<string, any> = { "items._id": itemId };
+    if (effectiveUserId) {
+      query.userId = effectiveUserId;
+    } else if (sessionId) {
+      query.sessionId = sessionId;
+    }
+
+    const cart = await Cart.findOne(query);
     if (!cart) {
       res.status(404).json({
         success: false,
-        message: "Cart item not found",
+        message: "Cart item not found in your cart",
       });
       return;
     }
@@ -287,11 +384,12 @@ export const deleteCartItem = async (
 
     res.status(200).json({
       success: true,
-      message: "Cart item removed successfully",
+      message: "Item removed",
       count: cart.items.length,
       totalQuantity: cart.totalQuantity,
       totalPrice: cart.totalPrice,
-      data: cart,
+      sessionId: cart.sessionId,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);
@@ -304,22 +402,27 @@ export const clearCart = async (
   next: NextFunction
 ): Promise<void> => {
   try {
+    const { effectiveUserId, sessionId } = resolveCartIdentity(req);
     const body = req.body || {};
-    const userId = (req.query.userId || body.userId) as string;
-    const sessionId = (req.query.sessionId || body.sessionId || req.headers["x-session-id"]) as string;
     const itemId = (req.query.itemId || req.query.cartItemId || req.query.id || body.itemId || body.cartItemId || body.id) as string;
 
     const query: Record<string, any> = {};
-    if (userId) query.userId = userId;
-    if (sessionId) query.sessionId = sessionId;
+    if (effectiveUserId) query.userId = effectiveUserId;
+    else if (sessionId) query.sessionId = sessionId;
+    else {
+      // Neither user nor session provided - nothing to clear
+      res.status(200).json({
+        success: true,
+        message: "Cart is empty",
+        count: 0,
+        totalQuantity: 0,
+        totalPrice: 0,
+        data: formatCartData(null),
+      });
+      return;
+    }
 
-    let cart = null;
-    if (Object.keys(query).length > 0) {
-      cart = await Cart.findOne(query);
-    }
-    if (!cart) {
-      cart = await Cart.findOne({}).sort({ updatedAt: -1 });
-    }
+    const cart = await Cart.findOne(query);
 
     if (cart) {
       if (itemId) {
@@ -334,11 +437,12 @@ export const clearCart = async (
 
     res.status(200).json({
       success: true,
-      message: itemId ? "Cart item removed successfully" : "Cart cleared successfully",
+      message: itemId ? "Item removed" : "Cart cleared",
       count: cart ? cart.items.length : 0,
       totalQuantity: cart ? cart.totalQuantity : 0,
       totalPrice: cart ? cart.totalPrice : 0,
-      data: cart || { items: [], totalPrice: 0, totalQuantity: 0 },
+      sessionId: cart?.sessionId,
+      data: formatCartData(cart),
     });
   } catch (error) {
     next(error);

@@ -39,13 +39,19 @@ export const createOrder = async (
       shippingFee: inputShippingFee,
       totalAmount: inputTotalAmount,
       totalPrice: inputTotalPrice,
+      pricing,
       userId,
       sessionId,
       clearCartAfterOrder = true,
     } = req.body;
 
-    const queryUserId = userId || req.body.user?._id;
-    const querySessionId = sessionId || (req.headers["x-session-id"] as string);
+    const authenticatedUserId = req.user?.id || null;
+    const queryUserId = authenticatedUserId || (userId || req.body.user?._id || null);
+    const querySessionId = (
+      (req.headers["x-session-id"] as string) ||
+      (req.headers["session-id"] as string) ||
+      sessionId
+    )?.toString().trim() || null;
 
     let orderItems: IOrderItem[] = [];
     let cartToClear: any = null;
@@ -81,7 +87,7 @@ export const createOrder = async (
         };
       });
     } else {
-      // Fetch items from active cart
+      // Fetch items from user's active cart
       const cartQuery: Record<string, any> = {};
       if (queryUserId) cartQuery.userId = queryUserId;
       else if (querySessionId) cartQuery.sessionId = querySessionId;
@@ -89,32 +95,35 @@ export const createOrder = async (
       if (Object.keys(cartQuery).length > 0) {
         cartToClear = await Cart.findOne(cartQuery);
       }
-      if (!cartToClear) {
-        cartToClear = await Cart.findOne({}).sort({ updatedAt: -1 });
+
+      if (!cartToClear || !cartToClear.items || cartToClear.items.length === 0) {
+        res.status(400).json({
+          success: false,
+          message: "Order cannot be created: No items provided and your cart is empty",
+        });
+        return;
       }
 
-      if (cartToClear && cartToClear.items && cartToClear.items.length > 0) {
-        orderItems = cartToClear.items.map((item: any) => ({
-          _id: new mongoose.Types.ObjectId(),
-          itemName: item.itemName,
-          price: item.price,
-          quantity: item.quantity,
-          dimensions: item.dimensions,
-          size: item.size,
-          surface: item.surface,
-          finishing: item.finishing,
-          wrapStyle: item.wrapStyle,
-          color: item.color,
-          borderWidth: item.borderWidth,
-          chooseFormat: item.chooseFormat,
-          shape: item.shape,
-          mattingStyle: item.mattingStyle,
-          image: item.image,
-          allImages: item.allImages,
-          designState: item.designState,
-          specifications: item.specifications,
-        }));
-      }
+      orderItems = cartToClear.items.map((item: any) => ({
+        _id: new mongoose.Types.ObjectId(),
+        itemName: item.itemName,
+        price: item.price,
+        quantity: item.quantity,
+        dimensions: item.dimensions,
+        size: item.size,
+        surface: item.surface,
+        finishing: item.finishing,
+        wrapStyle: item.wrapStyle,
+        color: item.color,
+        borderWidth: item.borderWidth,
+        chooseFormat: item.chooseFormat,
+        shape: item.shape,
+        mattingStyle: item.mattingStyle,
+        image: item.image,
+        allImages: item.allImages,
+        designState: item.designState,
+        specifications: item.specifications,
+      }));
     }
 
     if (orderItems.length === 0) {
@@ -142,11 +151,13 @@ export const createOrder = async (
       email: inputShippingAddress?.email || email || "",
       phone: inputShippingAddress?.phone || phone || "",
       address:
+        inputShippingAddress?.streetAddress ||
         inputShippingAddress?.address ||
         inputShippingAddress?.street ||
         address ||
         "",
       street:
+        inputShippingAddress?.streetAddress ||
         inputShippingAddress?.street ||
         inputShippingAddress?.address ||
         address ||
@@ -172,22 +183,41 @@ export const createOrder = async (
           : undefined,
     };
 
-    // Calculate subtotal and total
+    // Calculate subtotal, taxes, shipping, discount, and total
     const computedSubtotal = orderItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0
     );
     const subtotal =
-      inputSubtotal !== undefined ? Number(inputSubtotal) : computedSubtotal;
-    const tax = inputTax !== undefined ? Number(inputTax) : 0;
+      pricing?.subtotal !== undefined
+        ? Number(pricing.subtotal)
+        : inputSubtotal !== undefined
+        ? Number(inputSubtotal)
+        : computedSubtotal;
+
+    const discount = pricing?.discount !== undefined ? Number(pricing.discount) : 0;
+    const tax =
+      pricing?.taxes !== undefined
+        ? Number(pricing.taxes)
+        : inputTax !== undefined
+        ? Number(inputTax)
+        : 0;
+
     const shippingFee =
-      inputShippingFee !== undefined ? Number(inputShippingFee) : 0;
+      pricing?.shipping !== undefined
+        ? Number(pricing.shipping)
+        : inputShippingFee !== undefined
+        ? Number(inputShippingFee)
+        : 0;
+
     const totalAmount =
-      inputTotalAmount !== undefined
+      pricing?.total !== undefined
+        ? Number(pricing.total)
+        : inputTotalAmount !== undefined
         ? Number(inputTotalAmount)
         : inputTotalPrice !== undefined
         ? Number(inputTotalPrice)
-        : subtotal + tax + shippingFee;
+        : Math.max(0, subtotal - discount + tax + shippingFee);
 
     const orderId = generateOrderId();
 
@@ -224,8 +254,30 @@ export const createOrder = async (
 
     res.status(201).json({
       success: true,
-      message: "Order created successfully",
-      data: order,
+      message: "Order placed successfully",
+      data: {
+        _id: order._id,
+        orderNumber: order.orderId,
+        orderId: order.orderId,
+        status: "Confirmed",
+        orderStatus: order.orderStatus,
+        total: order.totalAmount,
+        totalAmount: order.totalAmount,
+        subtotal: order.subtotal,
+        pricing: {
+          subtotal: order.subtotal,
+          discount,
+          shipping: order.shippingFee,
+          taxes: order.tax,
+          total: order.totalAmount,
+          couponCode: pricing?.couponCode,
+        },
+        items: order.items,
+        shippingAddress: order.shippingAddress,
+        paymentDetails: order.paymentDetails,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+      },
     });
   } catch (error) {
     next(error);
@@ -238,21 +290,69 @@ export const getOrders = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const userId = (req.query.userId || req.query.user) as string;
-    const sessionId = (req.query.sessionId || req.headers["x-session-id"]) as string;
+    const isAdmin = Boolean(
+      req.admin ||
+      req.user?.role === "admin" ||
+      req.user?.role === "superadmin"
+    );
+
+    const authenticatedUserId = req.user?.id || null;
+    const sessionId = (
+      (req.headers["x-session-id"] as string) ||
+      (req.headers["session-id"] as string) ||
+      req.query.sessionId
+    )?.toString().trim() || null;
+
     const status = req.query.status as string;
 
     const query: Record<string, any> = {};
-    if (userId) query.userId = userId;
-    if (sessionId) query.sessionId = sessionId;
-    if (status) query.orderStatus = status;
+
+    if (isAdmin) {
+      // Admin can view all orders, or filter by userId / sessionId
+      if (req.query.userId) query.userId = req.query.userId;
+      else if (sessionId) query.sessionId = sessionId;
+    } else if (authenticatedUserId) {
+      // Authenticated user: strictly view their own orders!
+      query.userId = authenticatedUserId;
+    } else if (sessionId) {
+      // Guest user: strictly view orders for this session!
+      query.sessionId = sessionId;
+    } else {
+      // Unauthenticated guest with no session: CANNOT VIEW ANY ORDERS!
+      res.status(200).json({
+        success: true,
+        count: 0,
+        data: [],
+      });
+      return;
+    }
+
+    if (status) {
+      query.orderStatus = status;
+    }
 
     const orders = await Order.find(query).sort({ createdAt: -1 });
 
+    const formattedOrders = orders.map((order) => {
+      const obj = order.toObject ? order.toObject() : { ...order };
+      return {
+        ...obj,
+        orderNumber: obj.orderId,
+        status: obj.orderStatus === "pending" ? "Confirmed" : obj.orderStatus,
+        pricing: {
+          total: obj.totalAmount,
+          subtotal: obj.subtotal,
+          shipping: obj.shippingFee,
+          taxes: obj.tax,
+        },
+        total: obj.totalAmount,
+      };
+    });
+
     res.status(200).json({
       success: true,
-      count: orders.length,
-      data: orders,
+      count: formattedOrders.length,
+      data: formattedOrders,
     });
   } catch (error) {
     next(error);
@@ -280,6 +380,29 @@ export const getOrderById = async (
       res.status(404).json({
         success: false,
         message: "Order not found",
+      });
+      return;
+    }
+
+    const isAdmin = Boolean(
+      req.admin ||
+      req.user?.role === "admin" ||
+      req.user?.role === "superadmin"
+    );
+    const authenticatedUserId = req.user?.id || null;
+    const sessionId = (
+      (req.headers["x-session-id"] as string) ||
+      (req.headers["session-id"] as string) ||
+      req.query.sessionId
+    )?.toString().trim() || null;
+
+    const isOwner = Boolean(authenticatedUserId && order.userId && order.userId === authenticatedUserId);
+    const isSessionOwner = Boolean(!order.userId && order.sessionId && sessionId && order.sessionId === sessionId);
+
+    if (!isAdmin && !isOwner && !isSessionOwner) {
+      res.status(403).json({
+        success: false,
+        message: "Access denied. You do not have permission to view this order",
       });
       return;
     }
@@ -315,6 +438,30 @@ export const updateOrderStatus = async (
       res.status(404).json({
         success: false,
         message: "Order not found",
+      });
+      return;
+    }
+
+    const isAdmin = Boolean(
+      req.admin ||
+      req.user?.role === "admin" ||
+      req.user?.role === "superadmin"
+    );
+    const authenticatedUserId = req.user?.id || null;
+    const isOwner = Boolean(authenticatedUserId && order.userId && order.userId === authenticatedUserId);
+
+    if (!isAdmin && !isOwner) {
+      res.status(403).json({
+        success: false,
+        message: "Access denied. You do not have permission to update this order",
+      });
+      return;
+    }
+
+    if (!isAdmin && orderStatus && orderStatus !== "cancelled") {
+      res.status(403).json({
+        success: false,
+        message: "Only administrators can update order fulfillment status",
       });
       return;
     }
@@ -355,10 +502,10 @@ export const deleteOrder = async (
 
     let order = null;
     if (mongoose.Types.ObjectId.isValid(id)) {
-      order = await Order.findByIdAndDelete(id);
+      order = await Order.findById(id);
     }
     if (!order) {
-      order = await Order.findOneAndDelete({ orderId: id });
+      order = await Order.findOne({ orderId: id });
     }
 
     if (!order) {
@@ -368,6 +515,24 @@ export const deleteOrder = async (
       });
       return;
     }
+
+    const isAdmin = Boolean(
+      req.admin ||
+      req.user?.role === "admin" ||
+      req.user?.role === "superadmin"
+    );
+    const authenticatedUserId = req.user?.id || null;
+    const isOwner = Boolean(authenticatedUserId && order.userId && order.userId === authenticatedUserId);
+
+    if (!isAdmin && (!isOwner || (order.orderStatus !== "pending" && order.orderStatus !== "cancelled"))) {
+      res.status(403).json({
+        success: false,
+        message: "Access denied. Only administrators can delete active orders",
+      });
+      return;
+    }
+
+    await Order.deleteOne({ _id: order._id });
 
     res.status(200).json({
       success: true,
