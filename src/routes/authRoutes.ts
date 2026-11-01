@@ -17,8 +17,9 @@ router.post("/send-otp", sendOtp);
 // POST /api/v1/auth/verify-otp - Verifies OTP and returns JWT token + user profile
 router.post("/verify-otp", verifyOtp);
 
-// GET /api/v1/auth/profile - Fetches authenticated user profile
+// GET /api/v1/auth/profile & /api/v1/auth/me - Fetches authenticated user profile
 router.get("/profile", authenticateUser, getProfile);
+router.get("/me", authenticateUser, getProfile);
 
 // PUT /api/v1/auth/profile - Updates user profile details
 router.put("/profile", authenticateUser, updateProfile);

@@ -8,8 +8,7 @@ import { Shape } from "../models/Shape.Schema";
 const getAuthenticatedUserId = (req: Request): string | null => {
   if (req.user?.id) return req.user.id;
   if (req.admin?._id) return req.admin._id.toString();
-  const fallback = (req.body?.userId || req.query?.userId || req.headers["x-user-id"]) as string;
-  return fallback && typeof fallback === "string" ? fallback.trim() : null;
+  return null;
 };
 
 // Helper to resolve category by ID or Slug

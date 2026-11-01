@@ -35,7 +35,18 @@ app.use(
       }
     },
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "x-session-id",
+      "X-Session-Id",
+      "session-id",
+      "x-auth-token",
+      "X-Auth-Token",
+      "token",
+    ],
     credentials: true,
   }),
 );

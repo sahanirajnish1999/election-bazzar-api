@@ -18,28 +18,47 @@ declare global {
   }
 }
 
+export const extractTokenFromRequest = (req: Request): string | null => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && typeof authHeader === "string") {
+    if (authHeader.startsWith("Bearer ")) {
+      const token = authHeader.substring(7).trim();
+      if (token) return token;
+    } else if (authHeader.trim()) {
+      return authHeader.trim();
+    }
+  }
+
+  const xAuthToken = req.headers["x-auth-token"];
+  if (xAuthToken && typeof xAuthToken === "string" && xAuthToken.trim()) {
+    return xAuthToken.trim();
+  }
+
+  const tokenHeader = req.headers["token"];
+  if (tokenHeader && typeof tokenHeader === "string" && tokenHeader.trim()) {
+    return tokenHeader.trim();
+  }
+
+  const queryToken = req.query?.token;
+  if (queryToken && typeof queryToken === "string" && queryToken.trim()) {
+    return queryToken.trim();
+  }
+
+  return null;
+};
+
 export const authenticateAdmin = async (
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      res.status(401).json({
-        success: false,
-        message: "Access denied. No authorization token provided",
-      });
-      return;
-    }
-
-    const token = authHeader.split(" ")[1];
+    const token = extractTokenFromRequest(req);
 
     if (!token) {
       res.status(401).json({
         success: false,
-        message: "Access denied. Token is missing",
+        message: "Access denied. No authorization token provided",
       });
       return;
     }
@@ -86,9 +105,9 @@ export const authenticateUser = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const authHeader = req.headers.authorization;
+    const token = extractTokenFromRequest(req);
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!token) {
       res.status(401).json({
         success: false,
         message: "Authentication required. Please login with a valid authorization token",
@@ -96,35 +115,54 @@ export const authenticateUser = async (
       return;
     }
 
-    const token = authHeader.split(" ")[1];
+    try {
+      const decoded: UserTokenPayload = verifyToken(token);
+      const userId = (decoded.id || decoded.userId || decoded._id || decoded.sub) as string;
 
-    if (!token) {
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          message: "Invalid token payload: User ID missing",
+        });
+        return;
+      }
+
+      req.user = {
+        id: String(userId),
+        email: decoded.email,
+        role: decoded.role,
+        name: decoded.name,
+      };
+
+      next();
+      return;
+    } catch {
+      // Fallback: Check if valid admin token
+      try {
+        const adminDecoded = verifyAdminToken(token);
+        if (adminDecoded && adminDecoded.id) {
+          const admin = await Admin.findById(adminDecoded.id);
+          if (admin && admin.status === "active") {
+            req.admin = admin;
+            req.user = {
+              id: admin._id.toString(),
+              email: admin.email,
+              role: admin.role,
+              name: admin.name,
+            };
+            next();
+            return;
+          }
+        }
+      } catch {
+        // Fall through to error response
+      }
+
       res.status(401).json({
         success: false,
-        message: "Access token is missing in authorization header",
+        message: "Invalid or expired authorization token",
       });
-      return;
     }
-
-    const decoded: UserTokenPayload = verifyToken(token);
-    const userId = (decoded.id || decoded.userId || decoded._id || decoded.sub) as string;
-
-    if (!userId) {
-      res.status(401).json({
-        success: false,
-        message: "Invalid token payload: User ID missing",
-      });
-      return;
-    }
-
-    req.user = {
-      id: String(userId),
-      email: decoded.email,
-      role: decoded.role,
-      name: decoded.name,
-    };
-
-    next();
   } catch {
     res.status(401).json({
       success: false,
@@ -139,10 +177,9 @@ export const optionalAuthenticateUser = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.split(" ")[1];
-      if (token) {
+    const token = extractTokenFromRequest(req);
+    if (token) {
+      try {
         const decoded: UserTokenPayload = verifyToken(token);
         const userId = (decoded.id || decoded.userId || decoded._id || decoded.sub) as string;
         if (userId) {
@@ -152,6 +189,24 @@ export const optionalAuthenticateUser = async (
             role: decoded.role,
             name: decoded.name,
           };
+        }
+      } catch {
+        try {
+          const adminDecoded = verifyAdminToken(token);
+          if (adminDecoded && adminDecoded.id) {
+            const admin = await Admin.findById(adminDecoded.id);
+            if (admin && admin.status === "active") {
+              req.admin = admin;
+              req.user = {
+                id: admin._id.toString(),
+                email: admin.email,
+                role: admin.role,
+                name: admin.name,
+              };
+            }
+          }
+        } catch {
+          // Ignore invalid token in optional auth
         }
       }
     }
