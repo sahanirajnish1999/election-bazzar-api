@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   createCategory,
   getAllCategories,
+  searchCategories,
   getCategoryById,
   getCategoryBySlug,
   updateCategory,
@@ -16,6 +17,7 @@ const router = Router();
 
 router.post("/", authenticateAdmin, createCategory);
 router.get("/", getAllCategories);
+router.get("/search", searchCategories);
 router.get("/compare", compareCategories);
 router.post("/compare", compareCategories);
 router.get("/id/:id", getCategoryById);
