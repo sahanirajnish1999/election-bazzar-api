@@ -618,4 +618,159 @@ export const deleteCategory = async (
   }
 };
 
+/**
+ * GET /api/v1/categories/search
+ * Optimized search API for search bar auto-complete / live search.
+ * Minimum starting requirement: at least 1 alphabet / character.
+ *
+ * Query parameters:
+ *   - q / query / search : search query string (minimum 1 character)
+ *   - limit : maximum results to return (default: 10, max: 50)
+ *   - status : "active" (default) | "inactive" | "all"
+ *   - includeDetails : "true" | "false" (default: false)
+ */
+export const searchCategories = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const rawQuery = (req.query.q || req.query.query || req.query.search || "") as string;
+    const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
+    const { status = "active", limit: queryLimit, includeDetails } = req.query;
+
+    // Minimum requirement: at least 1 character to trigger search
+    if (query.length < 1) {
+      res.status(200).json({
+        success: true,
+        count: 0,
+        total: 0,
+        query: "",
+        data: [],
+        message: "Search query must be at least 1 character long",
+      });
+      return;
+    }
+
+    const limit = Math.min(Math.max(1, parseInt(queryLimit as string, 10) || 10), 50);
+
+    // Escape regex special characters to prevent regex injection or syntax errors
+    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const searchRegex = new RegExp(escapedQuery, "i");
+
+    const filter: Record<string, any> = {
+      $or: [
+        { name: searchRegex },
+        { slug: searchRegex },
+        { description: searchRegex },
+      ],
+    };
+
+    if (status && status !== "all") {
+      filter.status = status;
+    }
+
+    // Fetch matching categories
+    const categories = await Category.find(filter);
+
+    // Relevance scoring & sorting:
+    // 1. Exact match (name or slug)
+    // 2. Name or slug starts with query
+    // 3. Word in name starts with query
+    // 4. Alphabetical by name
+    const qLower = query.toLowerCase();
+    categories.sort((a, b) => {
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+      const aSlug = a.slug.toLowerCase();
+      const bSlug = b.slug.toLowerCase();
+
+      const aExact = aName === qLower || aSlug === qLower;
+      const bExact = bName === qLower || bSlug === qLower;
+      if (aExact && !bExact) return -1;
+      if (!aExact && bExact) return 1;
+
+      const aStarts = aName.startsWith(qLower) || aSlug.startsWith(qLower);
+      const bStarts = bName.startsWith(qLower) || bSlug.startsWith(qLower);
+      if (aStarts && !bStarts) return -1;
+      if (!aStarts && bStarts) return 1;
+
+      const aWordStarts = aName.split(/\s+/).some((w) => w.startsWith(qLower));
+      const bWordStarts = bName.split(/\s+/).some((w) => w.startsWith(qLower));
+      if (aWordStarts && !bWordStarts) return -1;
+      if (!aWordStarts && bWordStarts) return 1;
+
+      return aName.localeCompare(bName);
+    });
+
+    const paginatedCategories = categories.slice(0, limit);
+
+    if (includeDetails === "true") {
+      const detailed = await Promise.all(
+        paginatedCategories.map((cat) => buildCategoryDetails(cat)),
+      );
+      res.status(200).json({
+        success: true,
+        count: detailed.length,
+        total: categories.length,
+        query,
+        data: detailed,
+      });
+      return;
+    }
+
+    // Fast search bar payload with starting price & shape counts
+    const catIds = paginatedCategories.map((c) => c._id);
+    const [prices, shapes] = await Promise.all([
+      Price.find({ categoryId: { $in: catIds }, status: "active" }),
+      Shape.find({ categoryId: { $in: catIds }, status: "active" }),
+    ]);
+
+    const result = paginatedCategories.map((cat) => {
+      const catPrices = prices.filter(
+        (p) => p.categoryId.toString() === cat._id.toString(),
+      );
+      const catShapes = shapes.filter(
+        (s) => s.categoryId.toString() === cat._id.toString(),
+      );
+
+      let startingPrice: number | null = null;
+      let startingMrp: number | null = null;
+
+      if (catPrices.length > 0) {
+        const minPriceDoc = catPrices.reduce((min, curr) =>
+          curr.price < min.price ? curr : min,
+        );
+        startingPrice = minPriceDoc.price;
+        startingMrp = minPriceDoc.mrp ?? Math.round(minPriceDoc.price * 2);
+      }
+
+      return {
+        _id: cat._id,
+        name: cat.name,
+        slug: cat.slug,
+        description: cat.description || null,
+        image: cat.image || null,
+        status: cat.status,
+        startingPrice,
+        startingMrp,
+        shapesCount: catShapes.length,
+        createdAt: cat.createdAt,
+        updatedAt: cat.updatedAt,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      count: result.length,
+      total: categories.length,
+      query,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 

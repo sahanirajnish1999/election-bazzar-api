@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { Category } from "../models/Category.Schema";
-import { buildCategoryDetails, getCategoryBySlug } from "./categoryController";
+import { buildCategoryDetails, getCategoryBySlug, searchCategories } from "./categoryController";
 
 /**
  * GET /api/v1/products
@@ -37,6 +37,12 @@ export const getAllProducts = async (
     next(error);
   }
 };
+
+/**
+ * GET /api/v1/products/search
+ * Search products for search bar (alias to searchCategories)
+ */
+export const searchProducts = searchCategories;
 
 /**
  * GET /api/v1/products/:slug
