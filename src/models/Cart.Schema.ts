@@ -9,15 +9,30 @@ export interface ICartItem {
   size?: string;
   surface?: string;
   finishing?: string;
+  frame?: string;
+  frameFinish?: string;
   wrapStyle?: string;
   color?: string;
   borderWidth?: string;
   chooseFormat?: string;
   shape?: string;
   mattingStyle?: string;
+  hardware?: string;
+  hangingHardware?: string;
+  backingMaterial?: string;
+  displayOption?: string;
+  photoFilter?: string;
+  lamination?: string;
+  retouchServices?: string;
+  majorRetouchNotes?: string;
+  isProofRequested?: boolean;
   image?: string;
+  previewImage?: string;
   allImages?: string[];
+  textLayers?: any[];
+  clipartLayers?: any[];
   designState?: Record<string, any>;
+  state?: Record<string, any>;
   specifications?: Record<string, any>;
   createdAt?: Date;
   updatedAt?: Date;
@@ -54,18 +69,33 @@ const CartItemSchema = new Schema<ICartItem>(
     size: { type: String, trim: true },
     surface: { type: String, trim: true },
     finishing: { type: String, trim: true },
+    frame: { type: String, trim: true },
+    frameFinish: { type: String, trim: true },
     wrapStyle: { type: String, trim: true },
     color: { type: String, trim: true },
     borderWidth: { type: String, trim: true },
     chooseFormat: { type: String, trim: true },
     shape: { type: String, trim: true },
     mattingStyle: { type: String, trim: true },
+    hardware: { type: String, trim: true },
+    hangingHardware: { type: String, trim: true },
+    backingMaterial: { type: String, trim: true },
+    displayOption: { type: String, trim: true },
+    photoFilter: { type: String, trim: true },
+    lamination: { type: String, trim: true },
+    retouchServices: { type: String, trim: true },
+    majorRetouchNotes: { type: String, trim: true },
+    isProofRequested: { type: Boolean, default: false },
     image: { type: String, default: null },
+    previewImage: { type: String, default: null },
     allImages: [{ type: String }],
+    textLayers: { type: Schema.Types.Mixed, default: [] },
+    clipartLayers: { type: Schema.Types.Mixed, default: [] },
     designState: { type: Schema.Types.Mixed, default: {} },
+    state: { type: Schema.Types.Mixed, default: {} },
     specifications: { type: Schema.Types.Mixed, default: {} },
   },
-  { timestamps: true }
+  { timestamps: true, strict: false }
 );
 
 const CartSchema = new Schema<ICart>(
